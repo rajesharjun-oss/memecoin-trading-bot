@@ -1,0 +1,32 @@
+[Unit]
+Description=MemeOps autonomous paper-trading dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=memecoin-bot
+Group=memecoin-bot
+WorkingDirectory=/opt/memecoin-bot
+EnvironmentFile=/etc/memecoin-bot/bot.env
+ExecStart=/opt/memecoin-bot/.venv/bin/memecoin-bot dashboard --no-browser --port 8787
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadOnlyPaths=/opt/memecoin-bot /etc/memecoin-bot
+ReadWritePaths=/var/lib/memecoin-bot
+
+[Install]
+WantedBy=multi-user.target

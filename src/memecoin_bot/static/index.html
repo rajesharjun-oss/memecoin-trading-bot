@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0b0d0f">
+    <title>MemeOps — Local Trading Console</title>
+    <link rel="stylesheet" href="/assets/app.css?v=20261106-remember-1">
+    <script src="/assets/app.js?v=20261106-remember-1" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to workspace</a>
+
+    <section class="pair-screen" id="pairScreen" aria-labelledby="pairTitle">
+      <div class="pair-panel">
+        <div class="brand-mark" aria-hidden="true">M</div>
+        <p class="eyebrow">Local Solana Console</p>
+        <h1 id="pairTitle">Pair this browser</h1>
+        <p class="pair-copy">Enter the startup code printed in PowerShell. The code never leaves this computer.</p>
+        <form id="pairForm" class="stack" novalidate>
+          <label for="pairCode">Pairing code</label>
+          <input id="pairCode" name="code" type="password" autocomplete="one-time-code" spellcheck="false" required minlength="8" placeholder="Paste the one-time code…">
+          <label class="remember-choice" for="rememberBrowser"><input id="rememberBrowser" name="remember_browser" type="checkbox"><span>Remember this browser for 14 days</span></label>
+          <p class="form-hint">Use this only on your own computer. It expires after 7 days without use; signing out revokes it.</p>
+          <p class="field-error" id="pairError" role="alert"></p>
+          <button class="button button-primary" type="submit">Open Console</button>
+        </form>
+        <div class="pair-security">
+          <span class="status-dot status-dot-safe" aria-hidden="true"></span>
+          Bound to 127.0.0.1 · HttpOnly session · live trading gated
+        </div>
+      </div>
+    </section>
+
+    <div class="app-shell" id="appShell" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">M</div>
+          <div>
+            <strong>MemeOps</strong>
+            <span>Paper research desk</span>
+          </div>
+        </div>
+
+        <nav aria-label="Primary navigation">
+          <p class="nav-label">Workspace</p>
+          <a class="nav-item active" href="#overview" data-view-link="overview">Overview</a>
+          <a class="nav-item" href="#discovery" data-view-link="discovery">Discovery</a>
+          <a class="nav-item" href="#paper" data-view-link="paper">Paper Portfolio</a>
+          <a class="nav-item" href="#lab" data-view-link="lab">Strategy Lab</a>
+        </nav>
+        <details class="nav-more" id="navMore">
+            <summary>More tools</summary>
+          <nav aria-label="Additional tools">
+            <a class="nav-item" href="#audit" data-view-link="audit">Token Audit</a>
+            <a class="nav-item" href="#trade" data-view-link="trade">Trade Console</a>
+            <a class="nav-item" href="#positions" data-view-link="positions">Positions</a>
+            <a class="nav-item" href="#activity" data-view-link="activity">Activity</a>
+            <a class="nav-item" href="#risk" data-view-link="risk">Risk Limits</a>
+            <button class="text-button" id="logoutAllButton" type="button">Sign out all browsers</button>
+            <button class="text-button mobile-lock" id="logoutButtonMobile" type="button">Sign out</button>
+          </nav>
+          </details>
+
+        <div class="sidebar-foot">
+          <div class="mode-chip" id="sidebarMode">Paper only</div>
+          <button class="text-button" id="logoutButton" type="button">Sign out</button>
+        </div>
+      </aside>
+
+      <main id="workspace" class="workspace" tabindex="-1">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="pageEyebrow">Paper research</p>
+            <h1 id="pageTitle">Paper desk</h1>
+          </div>
+          <div class="topbar-status">
+            <span class="mode-lock">Paper only <span aria-hidden="true">·</span> Live locked</span>
+            <span class="connection"><span class="status-dot" id="rpcDot"></span><span id="rpcStatus">Checking RPC</span></span>
+            <button class="wallet-pill" id="copyWallet" type="button" aria-label="Copy wallet address"><span id="walletShort">Wallet loading</span></button>
+          </div>
+        </header>
+
+        <section class="view overview-view active" data-view="overview" aria-labelledby="overviewHeading">
+          <h2 class="sr-only" id="overviewHeading">Overview</h2>
+          <section class="overview-focus" aria-labelledby="overviewFocusTitle">
+            <div class="overview-focus-main">
+              <div class="overview-focus-top">
+                <p class="eyebrow">Current focus</p>
+                <button class="text-button overview-refresh" id="refreshButton" type="button">Refresh view</button>
+              </div>
+              <h2 id="overviewFocusTitle">Checking the paper desk</h2>
+              <p id="overviewFocusCopy">Loading positions and worker health.</p>
+              <details class="overview-evidence">
+                <summary>Decision evidence</summary>
+                <small id="overviewFocusDetail">No strategy performance claim is available yet.</small>
+              </details>
+            </div>
+            <a class="button button-primary overview-focus-action" id="overviewFocusLink" href="#paper">Open Paper Portfolio</a>
+          </section>
+          <div class="metric-strip overview-metrics">
+            <article class="metric">
+              <span>Open paper positions</span>
+              <strong id="overviewOpenPositions">—</strong>
+              <small id="overviewPositionLimit">Position cap —</small>
+            </article>
+            <article class="metric">
+              <span>Marked paper equity</span>
+              <strong id="overviewEquity">—</strong>
+              <small id="overviewEquityNote">Loading local journal</small>
+            </article>
+            <article class="metric">
+              <span>Complete strategy exits</span>
+              <strong id="overviewEvidence">—</strong>
+              <small id="overviewEvidenceNote">Closed, costed trades only</small>
+            </article>
+            <article class="metric">
+              <span>Paper worker</span>
+              <strong id="overviewWorker">Checking</strong>
+              <small id="overviewWorkerNote">Waiting for status</small>
+            </article>
+          </div>
+          <p class="overview-validation" id="overviewValidationTimeline" aria-live="polite">Checking paper validation window.</p>
+
+          <details class="overview-secondary">
+            <summary>System checks and wallet details</summary>
+            <section class="panel readiness-panel" aria-labelledby="readinessTitle">
+              <div class="panel-head">
+                <div><p class="eyebrow">Preflight</p><h2 id="readinessTitle">System readiness</h2></div>
+              </div>
+              <div class="check-list" id="readinessList">
+                <div><span>RPC connection</span><strong>Checking…</strong></div>
+              </div>
+              <div class="overview-wallet-facts">
+                <div><span>Real wallet SOL</span><strong id="balanceValue">—</strong></div>
+                <div><span>Today’s exposure</span><strong id="exposureValue">—</strong><small id="exposureLimit">Daily cap —</small></div>
+                <div><span>Jupiter</span><strong id="jupiterValue">—</strong></div>
+              </div>
+            </section>
+          </details>
+
+          <details class="overview-secondary overview-order-history">
+            <summary>Live-order journal <span>Historical records only · execution locked</span></summary>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Time</th><th>Side</th><th>Amount</th><th>Status</th><th>Transaction</th></tr></thead>
+                <tbody id="overviewOrders"></tbody>
+              </table>
+              <p class="empty-state" id="overviewOrdersEmpty">No live orders recorded.</p>
+            </div>
+          </details>
+        </section>
+
+        <section class="view discovery-view" data-view="discovery" aria-labelledby="discoveryHeading">
+          <div class="section-intro split-intro">
+            <div>
+              <p class="eyebrow">Discovery · Paper only</p>
+              <h2 id="discoveryHeading">Discover and verify</h2>
+              <p>Activity ranks tokens for review. Contract safety and closed candles decide whether a paper entry is eligible.</p>
+            </div>
+            <div class="action-group">
+              <button class="button button-primary" id="jumpToCall" type="button">Paste a call</button>
+              <button class="button button-secondary" id="scanCandidates" type="button">Scan now</button>
+            </div>
+          </div>
+          <section class="candidate-focus" aria-labelledby="candidateFocusTitle">
+            <div class="candidate-focus-head">
+              <div>
+                <p class="eyebrow">Verified decision queue</p>
+                <h2 id="candidateFocusTitle">Candidates worth reviewing</h2>
+                <p id="candidateScopeSummary">Loading audited candidates…</p>
+              </div>
+              <div class="candidate-filters" role="group" aria-label="Candidate visibility">
+                <button class="candidate-filter active" id="showShortlist" type="button" aria-pressed="true">Audit passed <span id="shortlistCount">0</span></button>
+                <button class="candidate-filter" id="showAllCandidates" type="button" aria-pressed="false">All scanned <span id="allCandidateCount">0</span></button>
+              </div>
+            </div>
+            <div class="scan-summary" id="scanSummary" role="status" aria-live="polite">
+              <span>Scanner idle</span>
+              <span id="scanPrograms">2 verified programs</span>
+            </div>
+            <div class="table-wrap large-table">
+              <table class="discovery-table">
+                <thead><tr><th>Token / Source</th><th>Audit</th><th>Score</th><th>Decision</th><th>Market depth</th><th>Action</th></tr></thead>
+                <tbody id="candidatesTable"></tbody>
+              </table>
+              <p class="empty-state" id="candidatesEmpty">No audited candidates yet. Open All scanned to review every result.</p>
+            </div>
+          </section>
+          <section class="automation-console" aria-labelledby="automationTitle">
+            <div class="automation-command">
+              <div>
+                <p class="eyebrow">Autonomous Paper Worker</p>
+                <div class="automation-title-row">
+                  <h2 id="automationTitle">Continuous decision loop</h2>
+                  <span class="status-badge" id="automationBadge">Stopped</span>
+                </div>
+                <p id="automationMessage">Start the worker to scan, score, manage exits, and repeat on schedule. It cannot submit wallet transactions.</p>
+              </div>
+              <div class="automation-actions">
+                <button class="button button-primary" id="startAutomation" type="button">Start Worker</button>
+                <button class="button button-secondary" id="runAutomationOnce" type="button">Run Once</button>
+                <button class="button button-secondary" id="stopAutomation" type="button" disabled>Stop</button>
+              </div>
+            </div>
+            <details class="automation-details">
+              <summary>Worker rules and schedule</summary>
+              <dl class="automation-telemetry">
+                <div><dt>Cadence</dt><dd id="automationCadence">—</dd></div>
+                <div><dt>Next cycle</dt><dd id="automationNext">—</dd></div>
+                <div><dt>Completed</dt><dd id="automationCycles">0</dd></div>
+                <div><dt>TP ladder</dt><dd id="automationEntryExit">—</dd></div>
+                <div><dt>Trailing stop</dt><dd id="automationTrailing">—</dd></div>
+                <div><dt>Portfolio breaker</dt><dd id="automationBreaker">—</dd></div>
+              </dl>
+              <button class="button button-secondary automation-manual-action" id="runDecisionCycle" type="button">Run Paper Decision</button>
+            </details>
+            <div class="automation-event-line" aria-live="polite">
+              <span>Latest event</span>
+              <strong id="automationLatestEvent">No autonomous cycles recorded.</strong>
+              <time id="automationLatestTime"></time>
+            </div>
+          </section>
+          <section class="call-inbox" aria-labelledby="callInboxTitle">
+            <div class="call-inbox-copy">
+              <p class="eyebrow">Call Inbox</p>
+              <h2 id="callInboxTitle">Paste a call. Make it earn the entry.</h2>
+              <p>The bot audits and scores every contract address before acting. Calls that fail policy are rejected and logged; eligible calls can open paper positions only.</p>
+            </div>
+            <form id="callInboxForm" class="call-inbox-form">
+              <div>
+                <label for="callMints">Token contract addresses</label>
+                <textarea id="callMints" name="mints" rows="3" maxlength="400" spellcheck="false" autocomplete="off" required placeholder="Paste up to 5 Solana token addresses, one per line…"></textarea>
+                <small>Addresses only—never paste a seed phrase or private key.</small>
+              </div>
+              <div>
+                <label for="callSource">Source label <span>(optional)</span></label>
+                <input id="callSource" name="source_label" type="text" maxlength="80" autocomplete="off" placeholder="Example: Telegram watchlist">
+                <button class="button button-primary" type="submit">Audit &amp; Paper-Hop</button>
+              </div>
+            </form>
+          </section>
+          <details class="market-intel" id="marketIntel">
+            <summary>
+              <span class="market-intel-title"><span class="eyebrow">Research feeds · attention only</span><strong>Market watch</strong><small>Hot activity and public narratives are leads to review, never trade approval.</small></span>
+              <span class="market-intel-meta"><span id="marketWatchCount">Loading activity</span><span class="market-intel-open">Explore feeds</span></span>
+            </summary>
+          <section class="hot-radar" aria-labelledby="hotRadarTitle">
+            <div class="hot-radar-head">
+              <div>
+                <p class="eyebrow">Live Attention, Verified Separately</p>
+                <h2 id="hotRadarTitle">Hot Radar</h2>
+                <p>Ranks short-term activity from public DEX data. Paid boosts add a warning, never conviction or an automatic entry.</p>
+              </div>
+              <div class="hot-radar-summary" aria-label="Hot Radar summary">
+                <div><span><i class="summary-dot summary-dot-hot" aria-hidden="true"></i>Hot now</span><strong id="hotRadarHotCount">0</strong></div>
+                <div><span><i class="summary-dot summary-dot-organic" aria-hidden="true"></i>Unboosted</span><strong id="hotRadarOrganicCount">0</strong></div>
+                <div><span><i class="summary-dot summary-dot-time" aria-hidden="true"></i>Updated</span><strong id="hotRadarUpdated">Waiting</strong></div>
+              </div>
+            </div>
+            <div class="radar-toolbar">
+              <span>Attention signal only · contract and candle gates apply separately</span>
+              <button class="text-button" id="radarToggle" type="button" aria-expanded="false">Show all 15</button>
+            </div>
+            <details class="radar-key">
+              <summary>How heat is scored</summary>
+              <div class="radar-legend" aria-label="Radar scoring legend">
+                <span><i class="legend-line legend-line-hot" aria-hidden="true"></i><b>Hot</b> verified activity ≥65</span>
+                <span><i class="legend-line legend-line-warming" aria-hidden="true"></i><b>Warming</b> activity 45–64</span>
+                <span><i class="legend-line legend-line-risk" aria-hidden="true"></i><b>Attention risk</b> promotion or anomaly disclosed</span>
+              </div>
+            </details>
+            <div class="table-wrap hot-radar-table">
+              <table>
+                <thead><tr><th>#</th><th>Token</th><th>Heat</th><th>5m Flow</th><th>5m Volume</th><th>1h Volume</th><th>5m Move</th><th>Liquidity</th><th>Market Cap</th><th>Attention Risk</th></tr></thead>
+                <tbody id="hotRadarTable"></tbody>
+              </table>
+              <p class="empty-state" id="hotRadarEmpty">The first enriched scan is still collecting short-timeframe activity.</p>
+            </div>
+          </section>
+          <section class="narrative-intel" aria-labelledby="narrativeTitle">
+            <div class="narrative-head">
+              <div>
+                <p class="eyebrow">News + Public Social Evidence</p>
+                <h2 id="narrativeTitle">Narrative Intelligence</h2>
+                <p>Tracks recent stories and callouts through source matching. Links evidence to known tokens and flags promotion or security claims. <span id="narrativeModelState">OpenAI research off</span>; model assessments cannot approve an entry.</p>
+              </div>
+              <div class="narrative-actions">
+                <span class="status-badge" id="narrativeCollectorBadge">Collecting</span>
+                <button class="button button-secondary" id="refreshNarrative" type="button">Refresh Evidence</button>
+              </div>
+            </div>
+            <div class="narrative-metrics" aria-label="Narrative intelligence summary">
+              <div><span>Linked tokens</span><strong id="narrativeLinked">0</strong></div>
+              <div><span>High confidence</span><strong id="narrativeHighConfidence">0</strong></div>
+              <div><span>Recent evidence</span><strong id="narrativeEvidenceCount">0</strong></div>
+              <div><span>Sources</span><strong id="narrativeSources">Waiting</strong></div>
+            </div>
+            <details class="narrative-evidence">
+              <summary>Review linked signals and source feed</summary>
+            <div class="narrative-tags" id="narrativeTags" aria-label="Leading narrative tags"></div>
+            <div class="narrative-grid">
+              <div class="narrative-signal-panel">
+                <div class="mini-section-head"><div><span>Token signals</span><strong>Corroboration map</strong></div><small>Contract mentions outrank ticker matches</small></div>
+                <div class="table-wrap narrative-signal-table">
+                  <table>
+                    <thead><tr><th>Token</th><th>Signal</th><th>Evidence</th><th>Link</th><th>Risk</th></tr></thead>
+                    <tbody id="narrativeSignalsTable"></tbody>
+                  </table>
+                  <p class="empty-state" id="narrativeSignalsEmpty">No recent evidence links to a tracked token yet.</p>
+                </div>
+              </div>
+              <div class="narrative-feed-panel">
+                <div class="mini-section-head"><div><span>Evidence stream</span><strong>Newest first</strong></div><small>External links open with no referrer</small></div>
+                <div class="narrative-feed" id="narrativeFeed"></div>
+                <p class="empty-state" id="narrativeFeedEmpty">The public evidence collector has not stored any items yet.</p>
+              </div>
+            </div>
+            </details>
+          </section>
+          </details>
+          <details class="discovery-archive">
+            <summary>Call history and decision log</summary>
+          <div class="section-head call-history-head">
+            <div><p class="eyebrow">Call History</p><h2>Inbox decisions</h2></div>
+            <span class="subtle-copy">Newest first</span>
+          </div>
+          <div class="table-wrap call-history-table">
+            <table>
+              <thead><tr><th>Time</th><th>Token</th><th>Source</th><th>Score</th><th>Verdict</th><th>Result</th><th>Reason</th></tr></thead>
+              <tbody id="callsTable"></tbody>
+            </table>
+            <p class="empty-state" id="callsEmpty">No calls submitted yet.</p>
+          </div>
+          <div class="section-head decision-head">
+            <div><p class="eyebrow">Explainability Log</p><h2>Recent decisions</h2></div>
+            <span class="subtle-copy">Every candidate is accounted for</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Time</th><th>Token</th><th>Score</th><th>Verdict</th><th>Action</th><th>Decision Reason</th></tr></thead>
+              <tbody id="decisionsTable"></tbody>
+            </table>
+            <p class="empty-state" id="decisionsEmpty">No strategy cycle has run yet.</p>
+          </div>
+          </details>
+        </section>
+
+        <section class="view paper-view" data-view="paper" aria-labelledby="paperHeading">
+          <div class="section-intro split-intro">
+            <div>
+              <p class="eyebrow">Capital-Free Rehearsal</p>
+              <h2 id="paperHeading">Test the system before the wallet.</h2>
+              <p>Paper entries use real audits, Jupiter routes, transaction compilation, and simulation. The worker checks exit quotes; saved marks are labeled as estimates until refreshed. No transaction is submitted and no SOL moves.</p>
+              <p id="paperCampaignNote" class="subtle-copy">Loading paper run</p>
+            </div>
+            <button class="button button-secondary" id="refreshPaper" type="button">Refresh Quotes</button>
+          </div>
+          <div class="metric-strip paper-metrics">
+            <article class="metric"><span>Available Cash</span><strong id="paperCash">—</strong><small>Simulated SOL</small></article>
+            <article class="metric"><span>Open Value</span><strong id="paperOpenValue">—</strong><small id="paperOpenValueNote">Latest exit quotes</small></article>
+            <article class="metric"><span>Estimated paper equity</span><strong id="paperEquity">—</strong><small id="paperEquityNote">Cash + open positions</small></article>
+            <article class="metric"><span>Paper P&amp;L estimate</span><strong id="paperPnl">—</strong><small id="paperPnlNote">Realized + unrealized</small></article>
+          </div>
+          <p class="subtle-copy">A quote can rise while a position remains below break-even. Paper P&amp;L compares estimated net proceeds with the full cash cost of entry, including modeled fees and reserved token-account rent.</p>
+          <section class="forward-evidence" aria-labelledby="forwardEvidenceTitle">
+            <div class="section-head">
+              <div><p class="eyebrow">Autonomous · closed trades only</p><h2 id="forwardEvidenceTitle">Forward paper evidence</h2></div>
+              <span class="status-badge" id="forwardStatus">Awaiting exits</span>
+            </div>
+            <div class="forward-metrics">
+              <article><span>Complete exits</span><strong id="forwardTrades">—</strong></article>
+              <article><span>Net realized P&amp;L</span><strong id="forwardPnl">—</strong></article>
+              <article><span>Win rate</span><strong id="forwardWinRate">—</strong></article>
+              <article><span>Closed-trade drawdown</span><strong id="forwardDrawdown">—</strong></article>
+            </div>
+            <p class="forward-note" id="forwardNote">Waiting for fully recorded autonomous paper exits.</p>
+            <details class="forward-detail">
+              <summary>More performance evidence</summary>
+              <dl>
+                <div><dt>Profit factor</dt><dd id="forwardProfitFactor">—</dd></div>
+                <div><dt>Net trade return</dt><dd id="forwardReturn">—</dd></div>
+                <div><dt>Entry rent reserved</dt><dd id="forwardRentReserved">—</dd></div>
+                <div><dt>Hypothetical P&amp;L with full rent recovery</dt><dd id="forwardRentRecovery">—</dd></div>
+                <div><dt>Expectancy per trade</dt><dd id="forwardExpectancy">—</dd></div>
+                <div><dt>Average holding period</dt><dd id="forwardHolding">—</dd></div>
+                <div><dt>Costed quote mark coverage</dt><dd id="forwardMarkCoverage">—</dd></div>
+                <div><dt>Observed position drawdown</dt><dd id="forwardMarkDrawdown">—</dd></div>
+                <div><dt>Loss exit reasons</dt><dd id="forwardLossReasons">—</dd></div>
+              </dl>
+            </details>
+          </section>
+          <div class="section-head paper-table-head">
+            <div><p class="eyebrow">Simulation Journal</p><h2>Paper positions</h2></div>
+            <span id="paperQuoteState" class="subtle-copy" role="status" aria-live="polite">Checking quotes</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Token</th><th>Entry cash cost</th><th>Proceeds + mark</th><th>Net P&amp;L</th><th>TP / Remaining</th><th>Net fill</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody id="paperPositionsTable"></tbody>
+            </table>
+            <p class="empty-state" id="paperPositionsEmpty">No paper positions yet. Review a passed candidate or use New Simulation below.</p>
+          </div>
+          <section class="panel paper-entry" aria-labelledby="paperEntryTitle">
+            <div class="panel-head">
+              <div><p class="eyebrow">New Simulation</p><h2 id="paperEntryTitle">Open a paper position</h2></div>
+              <span class="status-badge">No funds move</span>
+            </div>
+            <form id="paperOpenForm" class="paper-entry-form">
+              <div><label for="paperMint">Token contract address</label><input id="paperMint" name="mint" type="text" minlength="32" maxlength="64" autocomplete="off" spellcheck="false" required placeholder="Paste a Solana token mint…"></div>
+              <div><label for="paperAmount">Paper entry</label><div class="unit-input"><input id="paperAmount" name="amount_sol" type="number" min="0.001" max="10" step="0.001" value="0.005" required><span>SOL</span></div></div>
+              <div><label for="paperSlippage">Maximum slippage</label><div class="unit-input"><input id="paperSlippage" name="slippage_bps" type="number" min="1" max="2000" step="1" value="100" required><span>bps</span></div></div>
+              <button class="button button-primary" type="submit">Audit, Simulate &amp; Open</button>
+            </form>
+          </section>
+          <details class="execution-reality" aria-labelledby="executionRealityTitle">
+            <summary class="execution-reality-head">
+              <span><span class="eyebrow">Execution Reality</span><strong id="executionRealityTitle">Net fills, not headline prices</strong></span>
+              <span class="status-badge safe">Conservative model</span>
+            </summary>
+            <div class="execution-reality-grid">
+              <article><span>Fees and reserved rent</span><strong id="paperExplicitCosts">—</strong><small>Network + priority + token account; rent is cash outlay until reclaimed</small></article>
+              <article><span>Modeled slippage</span><strong id="paperModeledSlippage">—</strong><small id="paperSlippagePolicy">Waiting for policy</small></article>
+              <article><span>Route freshness</span><strong id="paperQuoteAgePolicy">—</strong><small>Older routes are rejected</small></article>
+              <article><span>Liquidity exposure cap</span><strong id="paperLiquidityCap">—</strong><small>Share of visible pool liquidity</small></article>
+            </div>
+          </details>
+        </section>
+
+        <section class="view" data-view="lab" aria-labelledby="labHeading">
+          <div class="section-intro split-intro lab-intro">
+            <div>
+              <p class="eyebrow">Paper-Only Research</p>
+              <h2 id="labHeading">Strategy Lab</h2>
+              <p>Read real pool candles, check the entry signal, and test paper trades after costs.</p>
+              <p class="lab-cohort-note" id="labCohortNote">Research sample is initializing.</p>
+              <p class="lab-cohort-note" id="labCaptureNote">Checking timely candle capture.</p>
+              <p class="lab-cohort-note" id="labEntryReadiness">Checking current entry data.</p>
+            </div>
+          </div>
+
+          <div class="lab-evidence-strip" aria-label="Prospective research evidence">
+            <div><span>Selected follow-up</span><strong id="labFollowupWindow">Waiting</strong><small id="labFollowupSample">No selection recorded yet</small></div>
+            <div><span>5m price path</span><strong id="labFollowupFive">Waiting</strong><small>Price only, no simulated fill</small></div>
+            <div><span>15m price path</span><strong id="labFollowupFifteen">Waiting</strong><small>Price only, no simulated fill</small></div>
+            <a href="#paper">See closed paper results <span aria-hidden="true">→</span></a>
+          </div>
+
+          <section class="lab-toolbar panel" aria-labelledby="labScenarioTitle">
+            <div class="panel-head">
+              <div><p class="eyebrow">Market &amp; Replay</p><h2 id="labScenarioTitle">Choose a token</h2></div>
+              <button class="button button-secondary" id="collectLabData" type="button">Collect Real Candles</button>
+            </div>
+            <form id="labForm" class="lab-form">
+              <div class="lab-field-wide"><label for="labMint">Tracked token</label><select id="labMint" name="mint" required><option value="">Collecting tracked tokens…</option></select></div>
+              <div><label for="labTimeframe">Timeframe</label><select id="labTimeframe" name="timeframe"><option value="1m" selected>1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option><option value="1h">1 hour</option></select></div>
+              <div class="lab-actions">
+                <button class="button button-primary" type="submit">Run Historical Replay</button>
+                <button class="button button-secondary" id="runEvaluation" type="button">Run Walk-Forward</button>
+              </div>
+              <details class="lab-policy-details" id="labPolicyDetails">
+                <summary>Replay settings <span>TP ladder / sell portions / stop loss</span></summary>
+                <div class="lab-policy-fields">
+                  <div><label for="labTpTargets">TP targets (%)</label><input id="labTpTargets" name="tp_targets" type="text" inputmode="decimal" maxlength="60" value="100, 300, 900" required><small>Increasing, comma-separated</small></div>
+                  <div><label for="labTpSales">Sell portions (%)</label><input id="labTpSales" name="tp_sales" type="text" inputmode="decimal" maxlength="60" value="50, 20, 15" required><small>Leaves the remainder running</small></div>
+                  <div><label for="labStopLoss">Stop loss (%)</label><input id="labStopLoss" name="stop_loss" type="number" min="1" max="95" step="0.5" value="35" required></div>
+                </div>
+              </details>
+            </form>
+            <p class="form-hint">Replay settings affect this test only. Paper automation uses its configured policy.</p>
+          </section>
+
+          <div class="lab-grid">
+            <section class="panel candle-panel" aria-labelledby="candleTitle">
+              <div class="panel-head"><div><p class="eyebrow">Candlestick Analysis</p><h2 id="candleTitle">Local market structure</h2></div><span class="status-badge" id="labDataBadge">Collecting</span></div>
+              <div class="candle-chart" id="candleChart"><p class="empty-state">Choose a tracked token while the collector builds history.</p></div>
+              <p class="chart-note" id="labVolumeNote">Pool trade volume in USD from GeckoTerminal; incomplete candles excluded.</p>
+            </section>
+            <section class="panel signal-panel" aria-labelledby="signalTitle">
+              <div class="panel-head"><div><p class="eyebrow">Entry Confirmation</p><h2 id="signalTitle">Four-factor gate</h2></div><strong class="signal-score" id="labSignalScore">0</strong></div>
+              <dl class="signal-factors">
+                <div><dt>Trend</dt><dd id="labTrend">Waiting</dd></div>
+                <div><dt>Momentum</dt><dd id="labMomentum">—</dd></div>
+                <div><dt>Volume</dt><dd id="labVolume">—</dd></div>
+                <div><dt>Liquidity</dt><dd id="labLiquidity">—</dd></div>
+              </dl>
+              <ul class="signal-reasons" id="labSignalReasons"><li>History collection has started.</li></ul>
+            </section>
+          </div>
+
+          <div class="metric-strip lab-results" aria-label="Backtest performance">
+            <article class="metric"><span>Replay Status</span><strong id="labReplayStatus">Not run</strong><small id="labReplayCoverage">0 candles</small></article>
+            <article class="metric"><span>Trades</span><strong id="labTrades">0</strong><small>Confirmed entries</small></article>
+            <article class="metric"><span>Win Rate</span><strong id="labWinRate">—</strong><small>Positive closed trades</small></article>
+            <article class="metric"><span>Strategy Return</span><strong id="labReturn">—</strong><small id="labDrawdown">Max DD —</small></article>
+          </div>
+
+          <section class="evaluation-panel" aria-labelledby="evaluationTitle">
+            <div class="evaluation-head">
+              <div><p class="eyebrow">Out-of-Sample Evaluation</p><h2 id="evaluationTitle">Walk-forward evidence</h2><p>Parameters are selected on past candles, frozen, then tested on the next unseen window. A second pass increases execution costs by 50%.</p></div>
+              <span class="status-badge" id="evaluationBadge">Not run</span>
+            </div>
+            <div class="evaluation-metrics">
+              <article><span>OOS expectancy</span><strong id="evaluationExpectancy">—</strong><small id="evaluationTrades">0 closed trades</small></article>
+              <article><span>Profit factor</span><strong id="evaluationProfitFactor">—</strong><small>Gate: at least 1.25</small></article>
+              <article><span>Cost stress return</span><strong id="evaluationStress">—</strong><small>150% modeled costs</small></article>
+              <article><span>Promotion state</span><strong id="evaluationPromotion">Locked</strong><small>All validation gates required</small></article>
+            </div>
+            <div class="evaluation-detail-grid">
+              <div><h3>Validation gates</h3><div class="evaluation-gates" id="evaluationGates"><p class="empty-state">Run an evaluation after at least 36 candles are collected.</p></div></div>
+              <div><h3>Performance by regime</h3><div class="evaluation-regimes" id="evaluationRegimes"><p class="empty-state">Regime evidence appears from out-of-sample trades.</p></div></div>
+            </div>
+          </section>
+
+          <section class="circuit-section" aria-labelledby="circuitTitle">
+            <div class="section-head"><div><p class="eyebrow">Circuit Breakers</p><h2 id="circuitTitle">Entry locks, exit continuity</h2></div><span class="subtle-copy">Server enforced</span></div>
+            <div class="circuit-grid">
+              <article><span>Daily realized P&amp;L</span><strong id="labDailyPnl">—</strong><small id="labDailyLimit">Limit —</small></article>
+              <article><span>Consecutive losses</span><strong id="labLossStreak">—</strong><small id="labLossLimit">Limit —</small></article>
+              <article><span>Liquidity floor</span><strong id="labLiquidityFloor">—</strong><small>Open positions monitored</small></article>
+              <article><span>Portfolio drawdown</span><strong id="labPortfolioBreaker">—</strong><small>New entries stop; exits continue</small></article>
+            </div>
+          </section>
+
+          <div class="section-head lab-history-head"><div><p class="eyebrow">Performance by Strategy</p><h2>Replay history</h2></div><span class="subtle-copy">Latest 25 runs</span></div>
+          <div class="table-wrap">
+            <table><thead><tr><th>Run</th><th>Token</th><th>Frame</th><th>Strategy</th><th>Trades</th><th>Win rate</th><th>Return</th><th>Max drawdown</th></tr></thead><tbody id="labRunsTable"></tbody></table>
+            <p class="empty-state" id="labRunsEmpty">No backtests yet. Results appear after enough local history has accumulated.</p>
+          </div>
+        </section>
+
+        <section class="view" data-view="audit" aria-labelledby="auditHeading">
+          <div class="section-intro">
+            <p class="eyebrow">Contract Intelligence</p>
+            <h2 id="auditHeading">Audit a token before risking capital.</h2>
+            <p>Checks token authorities, Token-2022 extensions, controller-linked concentration, exact Pump vaults and bounded creation history.</p>
+          </div>
+          <form class="panel form-panel" id="auditForm" novalidate>
+            <label for="auditMint">Token contract address</label>
+            <div class="input-action">
+              <input id="auditMint" name="mint" type="text" autocomplete="off" spellcheck="false" required placeholder="Paste a Solana token mint…">
+              <button class="button button-primary" type="submit">Run Audit</button>
+            </div>
+            <p class="form-hint">Always use the contract address, never only a ticker symbol.</p>
+          </form>
+          <section class="result-panel" id="auditResult" hidden aria-live="polite">
+            <div class="result-status"><span class="status-badge" id="auditBadge">Pending</span><span id="auditMintResult"></span></div>
+            <div class="result-grid">
+              <div><span>Token program</span><strong id="auditProgram">—</strong></div>
+              <div><span>Decimals</span><strong id="auditDecimals">—</strong></div>
+              <div><span>Raw top 10</span><strong id="auditConcentration">—</strong></div>
+              <div><span>Effective top 10</span><strong id="auditEffectiveConcentration">—</strong></div>
+              <div><span>Supply</span><strong id="auditSupply">—</strong></div>
+            </div>
+            <section class="forensics-panel" id="auditForensics" hidden aria-labelledby="forensicsTitle">
+              <div class="forensics-head">
+                <div><p class="eyebrow">Wallet &amp; Vault Evidence</p><h3 id="forensicsTitle">Controller forensics</h3></div>
+                <span class="status-badge" id="forensicsBadge">Pending</span>
+              </div>
+              <div class="forensics-metrics">
+                <div><span>Accounts resolved</span><strong id="forensicsAccounts">—</strong></div>
+                <div><span>Controllers</span><strong id="forensicsControllers">—</strong></div>
+                <div><span>Recognized vaults</span><strong id="forensicsVaultShare">—</strong></div>
+                <div><span>Largest controller</span><strong id="forensicsLargestController">—</strong></div>
+                <div><span>Burned share</span><strong id="forensicsBurnShare">—</strong></div>
+              </div>
+              <div class="origin-strip">
+                <span>Creation signer</span>
+                <strong id="forensicsOrigin">Not established</strong>
+                <small id="forensicsOriginMeta">Bounded history; no guesses</small>
+              </div>
+              <div class="forensics-table-wrap">
+                <table class="forensics-table">
+                  <thead><tr><th>Class</th><th>Token account</th><th>Controller</th><th>Share</th></tr></thead>
+                  <tbody id="forensicsHolders"></tbody>
+                </table>
+                <p class="empty-state" id="forensicsEmpty">No controller evidence was available.</p>
+              </div>
+              <p class="forensics-limit" id="forensicsLimit"></p>
+            </section>
+            <div class="findings">
+              <h3>Findings</h3>
+              <ul id="auditFindings"></ul>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view="trade" aria-labelledby="tradeHeading">
+          <div class="section-intro">
+            <p class="eyebrow">Execution</p>
+            <h2 id="tradeHeading">Preview the route. Then decide.</h2>
+            <p>The preview expires after 90 seconds. Live submission stays locked in this research build.</p>
+          </div>
+          <div class="trade-layout">
+            <form class="panel trade-form" id="tradeForm" novalidate>
+              <fieldset class="segment-control">
+                <legend>Trade side</legend>
+                <label><input type="radio" name="side" value="buy" checked><span>Buy</span></label>
+                <label><input type="radio" name="side" value="sell"><span>Sell</span></label>
+              </fieldset>
+              <label for="tradeMint">Token contract address</label>
+              <input id="tradeMint" name="mint" type="text" autocomplete="off" spellcheck="false" required placeholder="Paste a Solana token mint…">
+              <div id="buyAmountField">
+                <label for="amountSol">Spend amount</label>
+                <div class="unit-input"><input id="amountSol" name="amount_sol" type="number" inputmode="decimal" min="0.000000001" step="0.001" value="0.005"><span>SOL</span></div>
+              </div>
+              <div id="sellAmountField" hidden>
+                <label for="sellPercent">Sell percentage</label>
+                <select id="sellPercent" name="sell_percent"><option value="25">25%</option><option value="50">50%</option><option value="75">75%</option><option value="100">100%</option></select>
+              </div>
+              <label for="slippageBps">Maximum slippage</label>
+              <div class="unit-input"><input id="slippageBps" name="slippage_bps" type="number" inputmode="numeric" min="1" max="2000" value="100"><span>bps</span></div>
+              <p class="form-hint">100 bps = 1%. The configured maximum is enforced again by the server.</p>
+              <button class="button button-primary" type="submit">Audit & Simulate</button>
+            </form>
+
+            <section class="preview-panel" id="previewPanel" aria-labelledby="previewTitle">
+              <div class="preview-empty" id="previewEmpty">
+                <span class="preview-index">01</span>
+                <h3 id="previewTitle">No active preview</h3>
+                <p>Enter a token and amount. The bot will audit the contract, request a Jupiter route, compile the instructions and simulate the transaction.</p>
+              </div>
+              <div id="previewResult" hidden>
+                <div class="preview-head">
+                  <div><p class="eyebrow">Simulation Passed</p><h3>Trade preview</h3></div>
+                  <span class="status-badge safe">Dry run</span>
+                </div>
+                <dl class="quote-list">
+                  <div><dt>Input</dt><dd id="previewInput">—</dd></div>
+                  <div><dt>Expected output</dt><dd id="previewOutput">—</dd></div>
+                  <div><dt>Price impact</dt><dd id="previewImpact">—</dd></div>
+                  <div><dt>Router</dt><dd id="previewRouter">—</dd></div>
+                  <div><dt>Compute units</dt><dd id="previewUnits">—</dd></div>
+                </dl>
+                <div class="preview-warning"><strong>Preview only.</strong> Quotes can move before execution. A live trade can still fail or lose its full value.</div>
+                <button class="button button-danger" id="executeButton" type="button" disabled>Live Trading Disabled</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view="positions" aria-labelledby="positionsHeading">
+          <div class="section-head">
+            <div><p class="eyebrow">Position Journal</p><h2 id="positionsHeading">Managed positions</h2></div>
+            <button class="button button-secondary" id="refreshPositions" type="button">Refresh</button>
+          </div>
+          <div class="table-wrap large-table">
+            <table>
+              <thead><tr><th>Position</th><th>Mint</th><th>Entry</th><th>Token amount</th><th>TP taken</th><th>Status</th></tr></thead>
+              <tbody id="positionsTable"></tbody>
+            </table>
+            <p class="empty-state" id="positionsEmpty">No managed positions yet. Position monitoring is recorded after you start a monitor from the execution engine.</p>
+          </div>
+        </section>
+
+        <section class="view" data-view="activity" aria-labelledby="activityHeading">
+          <div class="section-head">
+            <div><p class="eyebrow">Immutable Local Record</p><h2 id="activityHeading">Order activity</h2></div>
+            <button class="button button-secondary" id="refreshOrders" type="button">Refresh</button>
+          </div>
+          <div class="table-wrap large-table">
+            <table>
+              <thead><tr><th>Created</th><th>Order ID</th><th>Route</th><th>Amount</th><th>Status</th><th>Signature</th></tr></thead>
+              <tbody id="ordersTable"></tbody>
+            </table>
+            <p class="empty-state" id="ordersEmpty">No live orders recorded. Simulations do not count toward exposure or write order records.</p>
+          </div>
+        </section>
+
+        <section class="view" data-view="risk" aria-labelledby="riskHeading">
+          <div class="section-intro">
+            <p class="eyebrow">Server-Enforced Policy</p>
+            <h2 id="riskHeading">Risk limits</h2>
+            <p>These values are loaded from <code>.env</code> when the dashboard starts. The interface cannot silently weaken them.</p>
+          </div>
+          <div class="limits-list" id="limitsList"></div>
+          <div class="notice"><strong>To change a limit:</strong> stop the dashboard, edit <code>.env</code>, then restart it. Keep live trading disabled until repeated dry-runs behave as expected.</div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="executeDialog" aria-labelledby="executeTitle">
+      <form method="dialog" class="dialog-panel" id="executeForm">
+        <button class="dialog-close" value="cancel" aria-label="Close confirmation">×</button>
+        <p class="eyebrow danger-text">Irreversible Action</p>
+        <h2 id="executeTitle">Submit this trade to Solana?</h2>
+        <p>This sends a signed mainnet transaction from your burner wallet. Slippage, fees and a complete loss remain possible.</p>
+        <label for="riskPhrase">Type the exact risk acknowledgement</label>
+        <code class="risk-phrase" id="riskPhraseDisplay"></code>
+        <input id="riskPhrase" name="acknowledgement" type="text" autocomplete="off" spellcheck="false" required>
+        <div class="dialog-actions">
+          <button class="button button-secondary" value="cancel" type="button" id="cancelExecute">Cancel</button>
+          <button class="button button-danger" type="submit">Sign & Submit</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="paperCloseDialog" aria-labelledby="paperCloseTitle">
+      <form method="dialog" class="dialog-panel" id="paperCloseForm">
+        <button class="dialog-close" value="cancel" aria-label="Close confirmation">×</button>
+        <p class="eyebrow">Paper Portfolio</p>
+        <h2 id="paperCloseTitle">Close this simulated position?</h2>
+        <p>The bot will request a current Jupiter exit route and close at its quoted value. Paper tokens do not exist in the wallet, so exits are priced rather than submitted or simulated on-chain. This changes only the local paper journal.</p>
+        <div class="dialog-actions">
+          <button class="button button-secondary" value="cancel" type="button" id="cancelPaperClose">Keep Open</button>
+          <button class="button button-primary" type="submit">Quote &amp; Close</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>
