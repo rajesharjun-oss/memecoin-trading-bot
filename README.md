@@ -88,6 +88,27 @@ LIVE_TRADING_ENABLED=false
 Do not commit `.env`, the keypair, the SQLite database, or logs. For deployment, inject secrets from
 a managed secret store and mount the keypair read-only.
 
+### Optional Telegram health alerts
+
+Alerts are off by default. Create a bot with [BotFather](https://t.me/BotFather), start a private chat
+with it, and put its token and the numeric destination chat ID in your local `.env`:
+
+```dotenv
+ALERTS_ENABLED=true
+TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
+TELEGRAM_CHAT_ID=YOUR_NUMERIC_CHAT_ID
+```
+
+Run `memecoin-bot alerts --once` to test one alert cycle, then run `memecoin-bot alerts` as a separate
+supervised process alongside the dashboard. The alert process reads durable worker health from the
+same `TRADE_STATE_PATH`, so it can detect a dashboard or worker outage while it stays running. Alerts
+cover stale exit monitoring, failed
+collectors, open-position mark gaps, paper circuit breakers, and worker failures/restarts. Repeated
+issues are limited to one successful notification per 30 minutes; recovery is sent separately. A
+daily heartbeat confirms that the alert process is still running. If the entire host is offline, it
+cannot send an immediate alert; a missing heartbeat then indicates that the service needs attention.
+The token and chat ID stay out of the dashboard API and alert messages.
+
 ## First run
 
 Validate configuration and RPC health without trading:

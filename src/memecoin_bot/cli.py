@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
 
+from .alerts import run_persisted_alert_cycle, watch_alerts
 from .audit import audit_token
 from .config import ConfigurationError, Settings
 from .constants import LAMPORTS_PER_SOL, LIVE_RISK_PHRASE
@@ -346,6 +347,16 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_alerts(args: argparse.Namespace) -> int:
+    settings = _settings(args.env_file)
+    if args.once:
+        _json(run_persisted_alert_cycle(settings))
+    else:
+        _json({"alerts": "watching" if settings.alerts_enabled else "disabled"})
+        watch_alerts(settings, interval_seconds=args.interval_seconds)
+    return 0
+
+
 def _cmd_new_paper_run(args: argparse.Namespace) -> int:
     settings = _settings(args.env_file)
     result = create_forward_paper_run(settings.state_path, Path(args.output))
@@ -455,6 +466,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="refuse startup if live mode or paid OpenAI research is enabled",
     )
     dashboard.set_defaults(func=_cmd_dashboard)
+    alerts = commands.add_parser(
+        "alerts", help="watch paper-worker health and send optional alerts"
+    )
+    alerts.add_argument("--once", action="store_true", help="check worker health once and exit")
+    alerts.add_argument("--interval-seconds", type=int, default=60)
+    alerts.set_defaults(func=_cmd_alerts)
     new_run = commands.add_parser(
         "new-paper-run", help="create a fresh paper ledger with copied research observations"
     )
