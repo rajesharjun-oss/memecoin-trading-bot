@@ -141,6 +141,9 @@ class Settings:
     operations_backup_enabled: bool = True
     operations_backup_interval_seconds: int = 86_400
     operations_backup_directory: Path | None = None
+    alerts_enabled: bool = False
+    telegram_bot_token: str | None = field(default=None, repr=False)
+    telegram_chat_id: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.narrative_openai_enabled and not self.openai_api_key:
@@ -350,4 +353,7 @@ class Settings:
                 if os.getenv("OPERATIONS_BACKUP_DIRECTORY", "").strip()
                 else None
             ),
+            alerts_enabled=_boolean("ALERTS_ENABLED"),
+            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip() or None,
+            telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip() or None,
         )
