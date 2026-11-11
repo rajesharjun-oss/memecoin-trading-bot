@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from solders.pubkey import Pubkey
 
@@ -319,7 +320,7 @@ def test_forward_campaign_requires_current_final_entry_evidence(tmp_path: Path) 
             quote_source="v2-build",
         )
         stale = _revalidation()
-        stale["decision_as_of"] = int(stale["decision_as_of"]) - 121
+        stale["decision_as_of"] = cast(int, stale["decision_as_of"]) - 121
         _closed(
             journal,
             "stale-final-check",

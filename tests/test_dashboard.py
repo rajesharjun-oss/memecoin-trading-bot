@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -138,7 +140,10 @@ def test_startup_quarantines_unmonitored_open_paper_position(tmp_path: Path) -> 
             assert response.status_code == 400, path
             assert "interrupted" in response.text
     with TradeJournal(settings.state_path, readonly=True) as journal:
-        assert journal.runtime_state("paper_campaign")["status"] == "interrupted"
+        assert (
+            cast(dict[str, object], journal.runtime_state("paper_campaign"))["status"]
+            == "interrupted"
+        )
         assert journal.paper_position("unmonitored")["status"] == "open"
         assert len(journal.paper_fills()) == original_fills
 
@@ -176,7 +181,10 @@ def test_runtime_watchdog_quarantines_stalled_exit_monitor(tmp_path: Path) -> No
         assert app.state.paper_automation.status()["running"] is False
         assert app.state.paper_exit_monitor.status()["running"] is False
         with TradeJournal(settings.state_path, readonly=True) as journal:
-            assert journal.runtime_state("paper_campaign")["status"] == "interrupted"
+            assert (
+                cast(dict[str, object], journal.runtime_state("paper_campaign"))["status"]
+                == "interrupted"
+            )
             assert journal.paper_position("unmonitored")["status"] == "open"
             assert len(journal.paper_fills()) == original_fills
             watchdog = journal.runtime_state("paper_watchdog") or {}
@@ -460,7 +468,9 @@ def test_collector_fresh_entry_respects_pause_and_exit_monitor(
     assert app.state.market_collector._cycle()["decision"] is None
 
     @contextmanager
-    def fake_resources(_settings: Settings):
+    def fake_resources(
+        _settings: Settings,
+    ) -> Iterator[tuple[object, object, object, TradeJournal]]:
         with TradeJournal(settings.state_path) as journal:
             yield object(), object(), object(), journal
 

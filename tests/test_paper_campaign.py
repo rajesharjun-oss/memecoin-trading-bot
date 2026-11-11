@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from solders.pubkey import Pubkey
@@ -71,7 +72,10 @@ def test_startup_quarantine_requires_recent_monitor_and_position_quote(tmp_path:
             == interruption
         )
     with TradeJournal(source, readonly=True) as journal:
-        assert journal.runtime_state("paper_campaign")["status"] == "interrupted"
+        assert (
+            cast(dict[str, object], journal.runtime_state("paper_campaign"))["status"]
+            == "interrupted"
+        )
         assert journal.paper_position("open-position")["status"] == "open"
         assert len(journal.paper_fills()) == fill_count
 
@@ -148,7 +152,7 @@ def test_new_forward_run_keeps_research_provenance_and_isolates_positions(tmp_pa
         existing.set_runtime_state("paper_quote_health", {"unavailable": {"prior-position": {}}})
 
         result = create_forward_paper_run(source, target)
-        assert result["research_rows_copied"]["pool_candles"] == 1
+        assert cast(dict[str, Any], result["research_rows_copied"])["pool_candles"] == 1
         assert len(existing.paper_positions()) == 1
         with TradeJournal(target) as fresh:
             assert fresh.paper_positions() == []
@@ -234,7 +238,10 @@ def test_interrupted_forward_run_preserves_open_positions_and_excludes_them_from
     with TradeJournal(target, readonly=True) as fresh:
         assert fresh.paper_positions() == []
         assert fresh.paper_fills() == []
-        assert fresh.runtime_state("paper_campaign")["source_campaign_status"] == "interrupted"
+        assert (
+            cast(dict[str, object], fresh.runtime_state("paper_campaign"))["source_campaign_status"]
+            == "interrupted"
+        )
 
 
 def test_archive_closed_trade_with_unmonitored_mark_gap(tmp_path: Path) -> None:
@@ -295,4 +302,7 @@ def test_archive_closed_trade_with_unmonitored_mark_gap(tmp_path: Path) -> None:
     with TradeJournal(source, readonly=True) as journal:
         assert journal.paper_position("gap-position")["status"] == "closed"
         assert len(journal.paper_fills()) == 2
-        assert journal.runtime_state("paper_campaign")["status"] == "interrupted"
+        assert (
+            cast(dict[str, object], journal.runtime_state("paper_campaign"))["status"]
+            == "interrupted"
+        )
