@@ -304,6 +304,25 @@ def test_active_campaign_requires_exit_monitor_without_open_positions(tmp_path: 
     assert "exit_monitor_unavailable" in issues
 
 
+def test_stale_exit_monitor_produces_one_issue_not_duplicate_crash(tmp_path: Path) -> None:
+    settings = replace(
+        _settings(tmp_path),
+        strategy_lab_collection_enabled=False,
+        narrative_intelligence_enabled=False,
+    )
+    now = datetime(2026, 11, 10, tzinfo=UTC)
+    with TradeJournal(settings.state_path) as journal:
+        journal.set_runtime_state(
+            "paper_campaign", {"mode": "forward_paper_only", "status": "active"}
+        )
+        workers = {
+            "paper_exit_monitor": _status(now - timedelta(minutes=10)),
+            "paper_watchdog": _status(now),
+        }
+        issues, _ = collect_alert_issues(settings, journal, workers, now=now)
+    assert issues == {"exit_monitor_stale"}
+
+
 def test_worker_restart_is_alerted_once(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     now = datetime(2026, 11, 10, tzinfo=UTC)

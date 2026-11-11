@@ -121,6 +121,10 @@ def collect_alert_issues(
     for name in expected:
         status = workers.get(name, {})
         if _worker_failed(status, now):
+            if name == "paper_exit_monitor" and issues.intersection(
+                {"exit_monitor_stale", "exit_monitor_unavailable"}
+            ):
+                continue
             category = "collector_failure" if name.endswith("collector") else "worker_crash"
             issues.add(f"{category}:{name}")
     market_result = workers.get("market_collector", {}).get("last_result")
