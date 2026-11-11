@@ -11,11 +11,16 @@ FROM python:3.13-slim
 ENV PATH="/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TRADE_STATE_PATH=/app/state/trade-state.sqlite3
-RUN groupadd --system bot && useradd --system --gid bot --home /app bot \
-    && mkdir -p /app/state && chown -R bot:bot /app
+    TRADE_STATE_PATH=/app/state/trade-state.sqlite3 \
+    SOLANA_KEYPAIR_PATH=/app/state/paper-keypair.json \
+    OPERATIONS_BACKUP_DIRECTORY=/app/state/backups \
+    PAPER_AUTOMATION_AUTOSTART=true \
+    LIVE_TRADING_ENABLED=false
+RUN groupadd --system --gid 10001 bot \
+    && useradd --system --uid 10001 --gid bot --home /app bot \
+    && mkdir -p /app/state/backups && chown -R bot:bot /app
 COPY --from=builder /venv /venv
 WORKDIR /app
 USER bot
 ENTRYPOINT ["memecoin-bot"]
-CMD ["--help"]
+CMD ["dashboard", "--no-browser", "--free-only"]

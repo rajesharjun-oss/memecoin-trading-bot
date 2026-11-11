@@ -25,3 +25,5 @@ jobs:
       - run: pytest
       - run: python -m build
       - run: pip-audit
+      - run: docker compose config --no-env-resolution --quiet
+      - run: docker build --tag memeops-paper:ci .
