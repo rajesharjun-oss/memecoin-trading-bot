@@ -25,3 +25,6 @@ jobs:
       - run: pytest
       - run: python -m build
       - run: pip-audit
+      - run: sudo install -d -m 700 /etc/memecoin-bot && sudo install -m 600 /dev/null /etc/memecoin-bot/bot.env
+      - run: sudo docker compose config --no-env-resolution --quiet
+      - run: docker build --tag memeops-paper:ci .

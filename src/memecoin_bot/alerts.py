@@ -206,6 +206,7 @@ def _dispatch(
     workers: dict[str, dict[str, object]],
     client: httpx.Client,
     now: datetime,
+    startup: bool,
 ) -> dict[str, object]:
     raw = journal.runtime_state(STATE_KEY) or {}
     active = _safe_state_map(raw.get("active"))
@@ -224,6 +225,8 @@ def _dispatch(
     )
     heartbeat_raw = raw.get("last_heartbeat")
     last_heartbeat = heartbeat_raw if type(heartbeat_raw) is int else 0
+    startup_raw = raw.get("last_startup")
+    last_startup = startup_raw if type(startup_raw) is int else 0
     current = int(now.timestamp())
     issues, expected = collect_alert_issues(settings, journal, workers, now=now)
     sent = 0
@@ -238,6 +241,7 @@ def _dispatch(
                 "restart_sent": restart_sent,
                 "seen_runs": seen_runs,
                 "last_heartbeat": last_heartbeat,
+                "last_startup": last_startup,
             },
         )
 
@@ -256,6 +260,15 @@ def _dispatch(
         pending.pop(claim, None)
         persist()
         return delivered
+
+    startup_done = not startup or current - last_startup < COOLDOWN_SECONDS
+    if startup and not startup_done:
+
+        def mark_startup() -> None:
+            nonlocal last_startup
+            last_startup = current
+
+        startup_done = deliver("startup", "Paper alert monitor started", mark_startup)
 
     for name in sorted(expected):
         run_id = workers.get(name, {}).get("run_id")
@@ -316,7 +329,13 @@ def _dispatch(
             mark_heartbeat,
         )
     persist()
-    return {"paused": False, "exits": [], "alerts_sent": sent, "active_issues": len(issues)}
+    return {
+        "paused": False,
+        "exits": [],
+        "alerts_sent": sent,
+        "active_issues": len(issues),
+        "startup_done": startup_done,
+    }
 
 
 def run_alert_cycle(
@@ -326,6 +345,7 @@ def run_alert_cycle(
     *,
     client: httpx.Client | None = None,
     now: datetime | None = None,
+    startup: bool = False,
 ) -> dict[str, object]:
     """Never raise into the exit monitor or dashboard lifecycle."""
     if not settings.alerts_enabled:
@@ -340,9 +360,9 @@ def run_alert_cycle(
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     try:
         if client is not None:
-            return _dispatch(settings, journal, workers, client, now or datetime.now(UTC))
+            return _dispatch(settings, journal, workers, client, now or datetime.now(UTC), startup)
         with httpx.Client(follow_redirects=False, trust_env=False, timeout=5.0) as created:
-            return _dispatch(settings, journal, workers, created, now or datetime.now(UTC))
+            return _dispatch(settings, journal, workers, created, now or datetime.now(UTC), startup)
     except Exception as exc:
         LOGGER.warning("Telegram alert cycle failed (%s)", type(exc).__name__)
         return {"paused": False, "exits": [], "alerts": "failed"}
@@ -353,6 +373,7 @@ def run_persisted_alert_cycle(
     *,
     client: httpx.Client | None = None,
     now: datetime | None = None,
+    startup: bool = False,
 ) -> dict[str, object]:
     """Observe durable worker state from a separate process, including dashboard outages."""
     if not settings.alerts_enabled:
@@ -361,7 +382,9 @@ def run_persisted_alert_cycle(
         lock_path = settings.state_path.with_name(f"{settings.state_path.name}.alerts")
         with exclusive_worker_lock(lock_path), TradeJournal(settings.state_path) as journal:
             workers = {name: journal.runtime_state(name) or {} for name in _WORKER_NAMES}
-            return run_alert_cycle(settings, journal, workers, client=client, now=now)
+            return run_alert_cycle(
+                settings, journal, workers, client=client, now=now, startup=startup
+            )
     except Exception as exc:
         LOGGER.warning("Paper alert monitor failed (%s)", type(exc).__name__)
         return {"paused": False, "exits": [], "alerts": "failed"}
@@ -373,7 +396,9 @@ def watch_alerts(settings: Settings, *, interval_seconds: int = 60) -> None:
         raise ValueError("Alert interval must be between 30 and 3600 seconds")
     if not settings.alerts_enabled:
         return
+    startup = True
     while True:
         started = time.monotonic()
-        run_persisted_alert_cycle(settings)
+        result = run_persisted_alert_cycle(settings, startup=startup)
+        startup = startup and result.get("startup_done") is not True
         time.sleep(max(1.0, interval_seconds - (time.monotonic() - started)))

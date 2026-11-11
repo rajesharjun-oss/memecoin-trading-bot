@@ -1,0 +1,58 @@
+name: memeops-paper
+
+services:
+  worker:
+    build: .
+    image: memeops-paper:local
+    container_name: memeops-paper-worker
+    network_mode: host
+    env_file: /etc/memecoin-bot/bot.env
+    environment:
+      LIVE_TRADING_ENABLED: "false"
+      PAPER_AUTOMATION_AUTOSTART: "true"
+      NARRATIVE_OPENAI_ENABLED: "false"
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=32m
+    volumes:
+      - paper_state:/app/state
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD, memecoin-bot, paper-health]
+      interval: 60s
+      timeout: 10s
+      start_period: 5m
+      retries: 2
+
+  alerts:
+    image: memeops-paper:local
+    container_name: memeops-paper-alerts
+    command: [alerts, --interval-seconds, "60"]
+    depends_on:
+      worker:
+        condition: service_started
+    env_file: /etc/memecoin-bot/bot.env
+    environment:
+      LIVE_TRADING_ENABLED: "false"
+      PAPER_AUTOMATION_AUTOSTART: "true"
+      NARRATIVE_OPENAI_ENABLED: "false"
+      ALERTS_ENABLED: "true"
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=32m
+    volumes:
+      - paper_state:/app/state
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+
+volumes:
+  paper_state:
+    name: memeops-paper-state

@@ -19,6 +19,8 @@ from .journal import JournalError, TradeJournal
 from .jupiter import JupiterClient, JupiterError
 from .ohlcv import GeckoTerminalOhlcvClient, OhlcvError
 from .paper_campaign import PaperCampaignError, create_forward_paper_run
+from .paper_health import paper_worker_health
+from .paper_identity import ensure_paper_identity
 from .position import PositionEvent, monitor_position
 from .research_history import backfill_research_candles
 from .rpc import RpcClient, RpcError
@@ -357,6 +359,18 @@ def _cmd_alerts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_paper_health(args: argparse.Namespace) -> int:
+    healthy, issues = paper_worker_health(_settings(args.env_file))
+    _json({"healthy": healthy, "issues": issues})
+    return 0 if healthy else 1
+
+
+def _cmd_init_paper_identity(args: argparse.Namespace) -> int:
+    created = ensure_paper_identity(_settings(args.env_file))
+    _json({"paper_only": True, "created": created})
+    return 0
+
+
 def _cmd_new_paper_run(args: argparse.Namespace) -> int:
     settings = _settings(args.env_file)
     result = create_forward_paper_run(settings.state_path, Path(args.output))
@@ -472,6 +486,12 @@ def build_parser() -> argparse.ArgumentParser:
     alerts.add_argument("--once", action="store_true", help="check worker health once and exit")
     alerts.add_argument("--interval-seconds", type=int, default=60)
     alerts.set_defaults(func=_cmd_alerts)
+    health = commands.add_parser("paper-health", help="check unattended paper-worker freshness")
+    health.set_defaults(func=_cmd_paper_health)
+    identity = commands.add_parser(
+        "init-paper-identity", help="create an unfunded identity in the paper-state volume"
+    )
+    identity.set_defaults(func=_cmd_init_paper_identity)
     new_run = commands.add_parser(
         "new-paper-run", help="create a fresh paper ledger with copied research observations"
     )
