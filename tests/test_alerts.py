@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -213,6 +214,8 @@ def test_provider_failure_is_isolated_and_secrets_are_not_logged(
 ) -> None:
     settings = _settings(tmp_path)
     now = datetime(2026, 11, 10, tzinfo=UTC)
+    caplog.set_level(logging.DEBUG, logger="httpx")
+    caplog.set_level(logging.DEBUG, logger="httpcore")
 
     def fail(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(f"failed for {request.url}", request=request)
@@ -235,6 +238,8 @@ def test_provider_failure_is_isolated_and_secrets_are_not_logged(
         assert CHAT_ID not in str(persisted)
     assert TOKEN not in caplog.text
     assert CHAT_ID not in caplog.text
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
     assert TOKEN not in repr(settings)
     assert CHAT_ID not in repr(settings)
 
