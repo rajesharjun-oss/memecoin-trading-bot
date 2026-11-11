@@ -12,6 +12,7 @@ from solders.pubkey import Pubkey
 from memecoin_bot.config import Settings
 from memecoin_bot.journal import TradeJournal
 from memecoin_bot.ohlcv import PoolCandle
+from memecoin_bot.operations import summarize_ohlcv_collection_capacity
 from memecoin_bot.strategy import StrategyDecision, evaluate_candidate
 from memecoin_bot.strategy_lab import (
     DECISION_FOLLOWUP_METHOD,
@@ -29,7 +30,6 @@ from memecoin_bot.verification import (
     summarize_current_research_lanes,
     summarize_decision_cycle_integrity,
     summarize_market_eligible_followup_replay,
-    summarize_ohlcv_collection_capacity,
     summarize_recent_decisions,
     summarize_saved_market_gate_reproducibility,
     verify_paper_entry_market_gate,
@@ -78,7 +78,7 @@ def test_collector_rejection_outcomes_keep_missing_paths_in_denominator() -> Non
         }
     }
     summary = summarize_collector_signal_outcomes(paths)
-    five = summary["horizons"]["5"]
+    five = cast(dict[str, Any], summary["horizons"])["5"]
     assert five["sample_size"] == 4
     observed = five["reason_groups"][0]
     assert observed["observations"] == 3
@@ -120,13 +120,15 @@ def test_collector_rejection_summary_requires_distinct_tokens() -> None:
             }
         )
 
-    repeated = summarize(["same-mint"] * 30)["horizons"]["5"]["reason_groups"][0]
+    repeated = cast(dict[str, Any], summarize(["same-mint"] * 30)["horizons"])["5"][
+        "reason_groups"
+    ][0]
     assert repeated["timely_outcomes"] == 30
     assert repeated["timely_distinct_mints"] == 1
     assert repeated["interpretation_status"] == "insufficient_timely_sample"
-    independent = summarize([f"mint-{index}" for index in range(30)])["horizons"]["5"][
-        "reason_groups"
-    ][0]
+    independent = cast(
+        dict[str, Any], summarize([f"mint-{index}" for index in range(30)])["horizons"]
+    )["5"]["reason_groups"][0]
     assert independent["timely_distinct_mints"] == 30
     assert independent["interpretation_status"] == "descriptive_only"
 
@@ -379,7 +381,7 @@ def test_current_research_capture_counts_elapsed_slots_and_selected_pool(tmp_pat
                 audit_summary=None,
                 top10_concentration_bps=None,
                 decimals=6,
-                market=market,
+                market=cast(dict[str, object] | None, market),
             )
         journal.record_research_selection(
             [focus_mint, secondary_mint],
@@ -454,7 +456,7 @@ def test_decision_cycle_integrity_distinguishes_complete_partial_and_corrupt() -
         "partial_recent_window": 1,
         "inconsistent": 1,
     }
-    assert result["cycles"][0]["paper_opened"] == 1
+    assert cast(list[dict[str, object]], result["cycles"])[0]["paper_opened"] == 1
 
 
 def test_saved_market_gate_replays_with_its_policy_and_narrative(tmp_path: Path) -> None:
@@ -936,7 +938,7 @@ def test_paper_entry_parity_excludes_bars_first_seen_after_decision(
         )
         for frame in ("1m", "5m", "15m", "1h")
     }
-    evidence = {
+    evidence: dict[str, Any] = {
         "decision_as_of": decision_at,
         "pool": "pool",
         "candle_policy": {"minimum_liquidity_usd": "25000", "signal_threshold": 75},
@@ -950,17 +952,21 @@ def test_paper_entry_parity_excludes_bars_first_seen_after_decision(
             "1h": None,
         },
     }
-    decision = {"mint": "mint", "evidence": evidence}
-    matched = verify_paper_entry_signal(object(), decision, default_minimum_liquidity_usd=30_000)
+    decision: dict[str, object] = {"mint": "mint", "evidence": evidence}
+    matched = verify_paper_entry_signal(
+        cast(TradeJournal, object()), decision, default_minimum_liquidity_usd=30_000
+    )
     assert matched["status"] == "matched"
     assert matched["policy_source"] == "recorded"
-    assert matched["known_candles"]["15m"] == 0
-    assert all(matched["frame_matches"].values())
+    assert cast(dict[str, object], matched["known_candles"])["15m"] == 0
+    assert all(cast(dict[str, bool], matched["frame_matches"]).values())
 
     evidence["candle_signals"]["1m"]["score"] = 0
-    mismatched = verify_paper_entry_signal(object(), decision, default_minimum_liquidity_usd=30_000)
+    mismatched = verify_paper_entry_signal(
+        cast(TradeJournal, object()), decision, default_minimum_liquidity_usd=30_000
+    )
     assert mismatched["status"] == "mismatch"
-    assert mismatched["frame_matches"]["1m"] is False
+    assert cast(dict[str, bool], mismatched["frame_matches"])["1m"] is False
 
     evidence["candle_policy"]["minimum_liquidity_usd"] = "1000000"
     evidence["candle_signals"] = {
@@ -977,7 +983,9 @@ def test_paper_entry_parity_excludes_bars_first_seen_after_decision(
         for frame in ("1m", "5m", "15m", "1h")
     }
     decision["verdict"] = "observe"
-    observed = verify_paper_entry_signal(object(), decision, default_minimum_liquidity_usd=30_000)
+    observed = verify_paper_entry_signal(
+        cast(TradeJournal, object()), decision, default_minimum_liquidity_usd=30_000
+    )
     assert observed["status"] == "matched"
     assert observed["expected_verdict"] == "observe"
     assert observed["replayed_entry_eligible"] is False

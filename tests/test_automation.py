@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from solders.pubkey import Pubkey
@@ -219,7 +219,7 @@ def test_entry_uses_current_exit_worker_after_restart(
         lambda **kwargs: {"evaluated": 0, "opened": None, "breaker_reasons": []},
     )
     now = datetime.now(UTC).isoformat()
-    old_result = {
+    old_result: dict[str, object] = {
         "state": "running",
         "run_id": "previous-run",
         "last_completed_run_id": "previous-run",
@@ -450,7 +450,7 @@ def test_uneconomic_exit_is_logged_separately_and_remains_unavailable(tmp_path: 
         assert failures[0]["error_reason"] == "below_exit_fees"
         assert failures[0]["quote_gross_out_lamports"] == 1_344
         assert journal.automation_events()[0]["event_type"] == "paper_exit_uneconomic"
-        assert journal.runtime_state("paper_quote_health")["unavailable"]
+        assert cast(dict[str, object], journal.runtime_state("paper_quote_health"))["unavailable"]
 
 
 def test_unquotable_open_exit_blocks_new_paper_entries(
@@ -958,7 +958,9 @@ def test_market_collector_summary_keeps_counts_without_provider_payloads() -> No
             }
         }
     )
-    assert narrative["narrative"]["openai_research"]["error_code"] == "http_401"
+    assert (
+        cast(dict[str, Any], narrative["narrative"])["openai_research"]["error_code"] == "http_401"
+    )
     assert "private-test-key" not in str(narrative)
 
 
@@ -1004,7 +1006,7 @@ def test_worker_cycle_schedule_accounts_for_network_work(
             return True
 
     ticks = iter((100.0, 100.0 + cycle_seconds))
-    monkeypatch.setattr(automation.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(cast(Any, automation).time, "monotonic", lambda: next(ticks))
     worker = PaperAutomationWorker(
         interval_seconds=30,
         cycle=lambda: {"paused": False, "scan": None, "decision": None, "exits": []},

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -152,17 +152,18 @@ def test_snapshot_summary_keeps_missing_decisions_in_denominator(tmp_path: Path)
             {5: [_decision(), missing], 15: [_decision(), missing]},
             as_of=BASE + 1_100,
         )
-    assert result["horizons"]["5"]["decision_count"] == 2
-    assert result["horizons"]["5"]["statuses"] == {
+    horizons = cast(dict[str, Any], result["horizons"])
+    assert horizons["5"]["decision_count"] == 2
+    assert horizons["5"]["statuses"] == {
         "observed_snapshot_proxy": 1,
         "missing_pool": 1,
     }
-    assert result["horizons"]["15"]["statuses"] == {
+    assert horizons["15"]["statuses"] == {
         "observed_snapshot_proxy": 1,
         "missing_pool": 1,
     }
-    assert result["horizons"]["5"]["observed_final_reasons"] == {"blocked by candle": 1}
-    assert result["horizons"]["5"]["final_reason_coverage"] == {
+    assert horizons["5"]["observed_final_reasons"] == {"blocked by candle": 1}
+    assert horizons["5"]["final_reason_coverage"] == {
         "blocked by candle": {"decisions": 2, "observed": 1, "coverage_pct": 50.0}
     }
 
@@ -176,12 +177,10 @@ def test_snapshot_summary_attributes_rejection_to_market_gate(tmp_path: Path) ->
     }
     with TradeJournal(tmp_path / "rejection-reasons.sqlite3") as journal:
         result = summarize_snapshot_decision_paths(journal, {5: [decision]}, as_of=BASE + 600)
-    row = result["horizons"]["5"]["rows"][0]
+    horizons = cast(dict[str, Any], result["horizons"])
+    row = horizons["5"]["rows"][0]
     assert row["final_reason"] == "liquidity is unavailable"
-    assert (
-        "no token-linked narrative evidence (+0)"
-        not in result["horizons"]["5"]["final_reason_coverage"]
-    )
+    assert "no token-linked narrative evidence (+0)" not in horizons["5"]["final_reason_coverage"]
 
 
 def test_future_price_path_starts_strictly_after_saved_decision() -> None:
@@ -253,12 +252,13 @@ def test_future_path_summary_keeps_missing_candidates_in_denominator(
         {5: [_decision(), missing], 15: [_decision(), missing]},
         as_of=BASE + 60 + 15 * 60 + 120,
     )
-    assert result["horizons"]["5"]["decision_count"] == 2
-    assert result["horizons"]["5"]["unique_mints"] == 2
-    assert result["horizons"]["5"]["rows"][0]["mint"] == "mint"
-    assert result["horizons"]["5"]["statuses"] == {"observed_timely": 1, "missing_pool": 1}
-    assert result["horizons"]["5"]["observed_final_reasons"] == {"blocked by candle": 1}
-    assert result["horizons"]["15"]["statuses"] == {"observed_timely": 1, "missing_pool": 1}
+    horizons = cast(dict[str, Any], result["horizons"])
+    assert horizons["5"]["decision_count"] == 2
+    assert horizons["5"]["unique_mints"] == 2
+    assert horizons["5"]["rows"][0]["mint"] == "mint"
+    assert horizons["5"]["statuses"] == {"observed_timely": 1, "missing_pool": 1}
+    assert horizons["5"]["observed_final_reasons"] == {"blocked by candle": 1}
+    assert horizons["15"]["statuses"] == {"observed_timely": 1, "missing_pool": 1}
 
 
 def test_followup_summary_uses_only_pool_snapshot_known_at_selection(

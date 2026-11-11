@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from solders.pubkey import Pubkey
@@ -179,16 +179,19 @@ def test_replay_market_score_requires_prior_recent_matching_policy(tmp_path: Pat
         )
         recorded = journal.market_policy_before(mint, decision_at_us=4_102_444_800_000_000)
         assert recorded is not None
-        observed_us = int(recorded["observed_at_us"])
+        observed_us = cast(int, recorded["observed_at_us"])
         assert journal.market_policy_before(mint, decision_at_us=observed_us - 1) is None
         decision_at_ms = (observed_us + 999) // 1_000 + 1
         assert (
-            replay_market_verdict(
-                journal,
-                settings,
-                mint=mint,
-                snapshot=snapshot,
-                decision_at_ms=decision_at_ms,
+            cast(
+                tuple[str, object],
+                replay_market_verdict(
+                    journal,
+                    settings,
+                    mint=mint,
+                    snapshot=snapshot,
+                    decision_at_ms=decision_at_ms,
+                ),
             )[0]
             == "eligible"
         )
@@ -280,7 +283,8 @@ def test_strategy_rejects_extreme_move_as_manipulation_guard(tmp_path: Path) -> 
     assert any("manipulation guard" in reason for reason in decision.reasons)
     assert decision.evidence["market_gate_verdict"] == "reject"
     assert any(
-        "manipulation guard" in reason for reason in decision.evidence["market_gate_reasons"]
+        "manipulation guard" in reason
+        for reason in cast(list[str], decision.evidence["market_gate_reasons"])
     )
 
 
@@ -573,14 +577,22 @@ def test_autonomous_paper_entry_waits_for_fresh_real_candles(tmp_path: Path) -> 
     first_cycle = [
         item
         for item in decisions
-        if item["evidence"]["decision_cycle_id"] == cycle_result["cycle_id"]
+        if cast(dict[str, Any], item["evidence"])["decision_cycle_id"] == cycle_result["cycle_id"]
     ]
     assert len(first_cycle) == 2
-    assert {item["evidence"]["decision_cycle_rank"] for item in first_cycle} == {1, 2}
-    assert all(item["evidence"]["decision_cycle_size"] == 2 for item in first_cycle)
-    assert all(item["evidence"]["decision_cycle_breakers"] == [] for item in first_cycle)
+    assert {
+        cast(dict[str, Any], item["evidence"])["decision_cycle_rank"] for item in first_cycle
+    } == {1, 2}
     assert all(
-        isinstance(item["evidence"]["decision_cycle_started_at"], str) for item in first_cycle
+        cast(dict[str, Any], item["evidence"])["decision_cycle_size"] == 2 for item in first_cycle
+    )
+    assert all(
+        cast(dict[str, Any], item["evidence"])["decision_cycle_breakers"] == []
+        for item in first_cycle
+    )
+    assert all(
+        isinstance(cast(dict[str, Any], item["evidence"])["decision_cycle_started_at"], str)
+        for item in first_cycle
     )
     assert blocked_result["entry_paused"] is True
     assert blocked_result["cycle_id"] != cycle_result["cycle_id"]
@@ -590,9 +602,9 @@ def test_autonomous_paper_entry_waits_for_fresh_real_candles(tmp_path: Path) -> 
     assert len(blocked_decisions) == 6
     assert any(item["action"] == "circuit_breaker:position_limit" for item in blocked_decisions)
     assert all(
-        item["evidence"]["decision_cycle_breakers"] == ["position_limit"]
+        cast(dict[str, Any], item["evidence"])["decision_cycle_breakers"] == ["position_limit"]
         for item in blocked_decisions
-        if item["evidence"]["decision_cycle_id"] == blocked_result["cycle_id"]
+        if cast(dict[str, Any], item["evidence"])["decision_cycle_id"] == blocked_result["cycle_id"]
     )
     opened_decision = next(item for item in decisions if item["action"] == "paper_opened")
     evidence = opened_decision["evidence"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 from memecoin_bot.automation import PaperAutomationWorker
 from memecoin_bot.journal import TradeJournal
@@ -27,7 +28,7 @@ def test_worker_run_id_changes_on_restart() -> None:
 def test_worker_history_only_records_new_completions(tmp_path: Path) -> None:
     start = datetime(2026, 11, 3, tzinfo=UTC)
     with TradeJournal(tmp_path / "state.sqlite3") as journal:
-        old = {
+        old: dict[str, object] = {
             "state": "stopped",
             "last_started_at": _stamp(start, 0),
             "last_completed_at": _stamp(start, 10),
@@ -36,11 +37,11 @@ def test_worker_history_only_records_new_completions(tmp_path: Path) -> None:
         journal.save_worker_state("paper_automation", old)
         assert journal.worker_cycles_since("paper_automation", _stamp(start, 0)) == []
 
-        begun = {**old, "state": "working", "last_started_at": _stamp(start, 60)}
+        begun: dict[str, object] = {**old, "state": "working", "last_started_at": _stamp(start, 60)}
         journal.save_worker_state("paper_automation", begun)
         assert journal.worker_cycles_since("paper_automation", _stamp(start, 0)) == []
 
-        finished = {
+        finished: dict[str, object] = {
             **begun,
             "state": "running",
             "last_completed_at": _stamp(start, 70),
@@ -82,7 +83,7 @@ def test_continuity_resets_on_gap_and_error(tmp_path: Path) -> None:
                         "last_completed_at": _stamp(start, seconds),
                     },
                 )
-        statuses = {
+        statuses: dict[str, dict[str, object]] = {
             name: {"running": True, "interval_seconds": 300, "last_error": None}
             for name in worker_names
         }
@@ -100,8 +101,9 @@ def test_continuity_resets_on_gap_and_error(tmp_path: Path) -> None:
         )
         gap = summarize_paper_continuity(journal, statuses, now=start + timedelta(seconds=1020))
         assert gap["state"] == "unverified"  # Other worker heartbeats are stale.
-        assert gap["workers"]["market_collector"]["heartbeat_gaps"] == 1
-        assert gap["workers"]["market_collector"]["current_streak_seconds"] == 10
+        gap_workers = cast(dict[str, Any], gap["workers"])
+        assert gap_workers["market_collector"]["heartbeat_gaps"] == 1
+        assert gap_workers["market_collector"]["current_streak_seconds"] == 10
 
         journal.save_worker_state(
             "market_collector",
@@ -113,8 +115,9 @@ def test_continuity_resets_on_gap_and_error(tmp_path: Path) -> None:
             },
         )
         failed = summarize_paper_continuity(journal, statuses, now=start + timedelta(seconds=1025))
-        assert failed["workers"]["market_collector"]["error_cycles"] == 1
-        assert failed["workers"]["market_collector"]["current_streak_seconds"] == 0
+        failed_workers = cast(dict[str, Any], failed["workers"])
+        assert failed_workers["market_collector"]["error_cycles"] == 1
+        assert failed_workers["market_collector"]["current_streak_seconds"] == 0
 
 
 def test_continuity_resets_after_quick_worker_restart(tmp_path: Path) -> None:
@@ -133,7 +136,7 @@ def test_continuity_resets_after_quick_worker_restart(tmp_path: Path) -> None:
                         "run_id": run_id,
                     },
                 )
-        statuses = {
+        statuses: dict[str, dict[str, object]] = {
             name: {
                 "running": True,
                 "interval_seconds": 300,
@@ -145,7 +148,9 @@ def test_continuity_resets_after_quick_worker_restart(tmp_path: Path) -> None:
         summary = summarize_paper_continuity(journal, statuses, now=start + timedelta(seconds=320))
         assert summary["state"] == "current"
         assert summary["current_streak_seconds"] == 10
-        assert all(row["worker_restarts"] == 1 for row in summary["workers"].values())
+        assert all(
+            row["worker_restarts"] == 1 for row in cast(dict[str, Any], summary["workers"]).values()
+        )
 
         statuses["market_collector"]["run_id"] = "third-run"
         assert (
@@ -173,7 +178,7 @@ def test_continuity_read_stays_bounded_and_can_prove_thirty_days(tmp_path: Path)
                         "run_id": "one-uninterrupted-run",
                     },
                 )
-        statuses = {
+        statuses: dict[str, dict[str, object]] = {
             name: {
                 "running": True,
                 "interval_seconds": 86_400,
@@ -187,5 +192,8 @@ def test_continuity_read_stays_bounded_and_can_prove_thirty_days(tmp_path: Path)
         )
         assert summary["state"] == "current"
         assert summary["history_window_started_at"] == _stamp(start, 14 * 86_400 + 10)
-        assert summary["current_streak_seconds"] >= 30 * 86_400
-        assert all(row["recorded_cycles"] == 31 for row in summary["workers"].values())
+        assert cast(int, summary["current_streak_seconds"]) >= 30 * 86_400
+        assert all(
+            row["recorded_cycles"] == 31
+            for row in cast(dict[str, Any], summary["workers"]).values()
+        )

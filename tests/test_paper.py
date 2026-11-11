@@ -258,7 +258,7 @@ def test_scan_prioritizes_fresh_market_candidates_within_spare_audit_budget(
             "journal": journal,
             "reaudit_priority": lambda item: item["mint"] == priority,
         }
-        first = scan_candidates(**kwargs)
+        first = scan_candidates(**cast(Any, kwargs))
         assert first["watchlist_reaudits"] == 8
         assert first["priority_watchlist_reaudits"] == 1
         assert checked[0] == priority
@@ -273,7 +273,7 @@ def test_scan_prioritizes_fresh_market_candidates_within_spare_audit_budget(
             "UPDATE market_snapshots SET captured_at=? WHERE mint=?",
             (int(now.timestamp()) - 600, priority),
         )
-        second = scan_candidates(**kwargs)
+        second = scan_candidates(**cast(Any, kwargs))
         assert second["watchlist_reaudits"] == 8
         assert second["priority_watchlist_reaudits"] == 0
         assert checked == sorted([*older, priority])[:8]
@@ -291,7 +291,7 @@ def test_scan_prioritizes_fresh_market_candidates_within_spare_audit_budget(
             "ohlcv_active_focus", {"mints": [priority], "selected_at": int(now.timestamp())}
         )
         kwargs["reaudit_priority"] = lambda _item: True
-        focused = scan_candidates(**kwargs)
+        focused = scan_candidates(**cast(Any, kwargs))
         assert focused["watchlist_reaudits"] == 8
         assert focused["priority_watchlist_reaudits"] == 8
         assert checked[0] == priority
@@ -824,10 +824,11 @@ def test_paper_service_open_mark_and_close(tmp_path: Path, monkeypatch: pytest.M
         first_mark = journal.paper_position_marks(position_id)
         assert len(first_mark) == 1
         assert first_mark[0]["value_lamports"] == 60
-        assert first_mark[0]["execution"]["side"] == "mark"
-        assert first_mark[0]["execution"]["cash_credit_lamports"] == 60
-        assert first_mark[0]["execution"]["quote_source"] == "v2"
-        assert first_mark[0]["execution"]["route_quote_attempts"] == 1
+        mark_execution = cast(dict[str, object], first_mark[0]["execution"])
+        assert mark_execution["side"] == "mark"
+        assert mark_execution["cash_credit_lamports"] == 60
+        assert mark_execution["quote_source"] == "v2"
+        assert mark_execution["route_quote_attempts"] == 1
         assert service.portfolio(refresh=False)["positions"][0]["quote_state"] == "recent_mark"
         with monkeypatch.context() as patch:
 
@@ -1300,8 +1301,14 @@ def test_forward_paper_open_persists_built_router_quote_evidence(
         assert opened["execution"]["entry_revalidation"]["candle_signals"]["1m"]["confirmed"]
         assert opened["execution"]["entry_revalidation"]["market_gate_inputs"]["mint"] == mint
         assert opened["execution"]["entry_revalidation"]["market_gate_verdict"] == "eligible"
-        assert journal.paper_positions()[0]["entry_execution"]["quote_source"] == "v2-build"
-        assert journal.paper_fills()[0]["execution"]["quote_source"] == "v2-build"
+        assert (
+            cast(dict[str, object], journal.paper_positions()[0]["entry_execution"])["quote_source"]
+            == "v2-build"
+        )
+        assert (
+            cast(dict[str, object], journal.paper_fills()[0]["execution"])["quote_source"]
+            == "v2-build"
+        )
         stored_entry = journal._connection.execute(
             "SELECT entry_execution_json, opened_at FROM paper_positions LIMIT 1"
         ).fetchone()

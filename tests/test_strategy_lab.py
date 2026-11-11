@@ -4,7 +4,7 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 from solders.pubkey import Pubkey
@@ -792,7 +792,7 @@ def test_intrabar_replay_ignores_liquidity_observed_after_entry_open() -> None:
 def test_replay_censors_exit_bar_observed_too_late(field: str) -> None:
     candles = _verified_trend(11)
     exit_bar = candles[10]
-    candles[10] = replace(exit_bar, **{field: exit_bar.opened_at + 60 + 121})
+    candles[10] = cast(Any, replace)(exit_bar, **{field: exit_bar.opened_at + 60 + 121})
     result = run_backtest(
         candles,
         minimum_liquidity_usd=25_000,
@@ -1329,7 +1329,7 @@ def test_research_pool_probe_rotates_bounded_requests_and_backs_off(
         assert first["research_pool_probe_status"] == "success"
         assert len(requested[0]) == 10
         state = journal.runtime_state("research_pool_market_probe") or {}
-        assert state["next_at"] >= before_first + 300
+        assert cast(int, state["next_at"]) >= before_first + 300
         journal.set_runtime_state("research_pool_market_probe", {**state, "next_at": 0})
         second = collect_market_snapshots(journal, limit=11)
         assert second["research_pool_probe_status"] == "success"
@@ -1345,10 +1345,11 @@ def test_research_pool_probe_rotates_bounded_requests_and_backs_off(
         before = int(time.time())
         limited_cycle = collect_market_snapshots(journal, limit=11)
         assert limited_cycle["research_pool_probe_status"] == "rate_limited"
-        assert (journal.runtime_state("research_pool_market_probe") or {})[
-            "next_at"
-        ] >= before + 600
-        assert limited_cycle["ohlcv_higher_budget_retry_after"] >= before + 3_600
+        assert (
+            cast(int, (journal.runtime_state("research_pool_market_probe") or {})["next_at"])
+            >= before + 600
+        )
+        assert cast(int, limited_cycle["ohlcv_higher_budget_retry_after"]) >= before + 3_600
 
         for mint in mints:
             journal.upsert_discovery_candidate(
@@ -1664,8 +1665,9 @@ def test_research_active_focus_records_conditioned_selection_and_replacement(
         replaced = journal.runtime_state("ohlcv_research_active_focus") or {}
         assert replaced["mint"] == safe
         assert replaced["selection_tier"] == "audit_safe"
-        assert replaced["history"][-1]["mint"] == market_ready
-        assert replaced["history"][-1]["cohort_selected_at"] == cohort_selected_at
+        history = cast(list[dict[str, object]], replaced["history"])
+        assert history[-1]["mint"] == market_ready
+        assert history[-1]["cohort_selected_at"] == cohort_selected_at
         assert second["research_active_focus_scheduled"] == 1
         assert research_cohort_mints(journal) == cohort
 
@@ -1737,7 +1739,10 @@ def test_ohlcv_rate_limit_cools_down_and_preserves_interrupted_mint(
         assert recovered["authentic_candles_refreshed"] == 2
         assert calls[1] == (first, "1m")
         assert (journal.runtime_state("ohlcv_schedule") or {})["cycle"] == 1
-        cycles = (journal.runtime_state("ohlcv_request_budget") or {})["recent_cycles"]
+        cycles = cast(
+            list[dict[str, object]],
+            (journal.runtime_state("ohlcv_request_budget") or {})["recent_cycles"],
+        )
         assert [(row["attempted"], row["succeeded"], row["rate_limited"]) for row in cycles] == [
             (1, 0, True),
             (0, 0, True),
@@ -2008,7 +2013,10 @@ def test_free_collection_repairs_five_minute_gap_without_losing_research_sample(
         assert second["direct_5m_repair_scheduled"] is False
         assert all(frame != "5m" for _, frame in calls)
 
-        history = (journal.runtime_state("ohlcv_direct_5m_repair_history") or {})["history"]
+        history = cast(
+            list[dict[str, object]],
+            (journal.runtime_state("ohlcv_direct_5m_repair_history") or {})["history"],
+        )
         history[-1]["selected_at"] = int(time.time()) - 301
         journal.set_runtime_state("ohlcv_direct_5m_repair_history", {"history": history})
         calls.clear()
@@ -2025,7 +2033,10 @@ def test_free_collection_repairs_five_minute_gap_without_losing_research_sample(
         )
         assert fourth["direct_5m_repair_scheduled"] is False
         assert all(frame != "5m" for _, frame in calls)
-        history = (journal.runtime_state("ohlcv_direct_5m_repair_history") or {})["history"]
+        history = cast(
+            list[dict[str, object]],
+            (journal.runtime_state("ohlcv_direct_5m_repair_history") or {})["history"],
+        )
         assert [row["mint"] for row in history] == [repaired_first, repaired_second]
         assert all(row["reason"] == "gap" and row["request_succeeded"] for row in history)
         assert all(row["bars_returned"] == 1 for row in history)
@@ -2069,7 +2080,10 @@ def test_free_collection_repairs_five_minute_gap_without_losing_research_sample(
         assert len(calls) == 4
         assert all((mint, "1m") in calls for mint in [*active, research[0]])
         assert (followup, "1m") not in calls
-        repair = (journal.runtime_state("ohlcv_direct_5m_repair_history") or {})["history"][-1]
+        repair = cast(
+            list[dict[str, object]],
+            (journal.runtime_state("ohlcv_direct_5m_repair_history") or {})["history"],
+        )[-1]
         assert repair["displaced_1m_mint"] == followup
         assert repair["displaced_decision_followup"] is True
 
@@ -2456,7 +2470,7 @@ def test_collection_prioritizes_market_ready_paper_candidate(
             journal,
             limit=1,
             active_candidate_priority=lambda candidate: (
-                float(candidate.get("liquidity_usd") or 0) >= 25_000
+                float(cast(str | int, candidate.get("liquidity_usd") or 0)) >= 25_000
             ),
         )
         assert result["research_cohort_size"] == 1
@@ -2578,7 +2592,7 @@ def test_collection_replaces_revision_blocked_focus_without_changing_cohort(
         result = collect_market_snapshots(
             journal, active_candidate_priority=lambda candidate: candidate["mint"] in ready
         )
-        focus = journal.runtime_state("ohlcv_active_focus") or {}
+        focus = cast(dict[str, Any], journal.runtime_state("ohlcv_active_focus") or {})
         assert set(focus["mints"]) == set(ready[1:])
         assert focus["revision_excluded"] == [ready[0]]
         assert result["strategy_focus_revision_excluded"] == 1
@@ -2644,7 +2658,7 @@ def test_collection_pins_market_ready_candidates_then_rotates_after_hour(
             assert result["active_market_ready_size"] == len(ready)
             assert result["strategy_focus_size"] == 2
             assert result["strategy_focus_scheduled"] == 2
-            focus = journal.runtime_state("ohlcv_active_focus") or {}
+            focus = cast(dict[str, Any], journal.runtime_state("ohlcv_active_focus") or {})
             current = set(focus["mints"])
             assert current.issubset(calls[before:])
             if pinned is None:
@@ -2662,14 +2676,16 @@ def test_collection_pins_market_ready_candidates_then_rotates_after_hour(
         collect_market_snapshots(
             journal, active_candidate_priority=lambda item: item["mint"] in ready
         )
-        replaced_focus_state = journal.runtime_state("ohlcv_active_focus") or {}
+        replaced_focus_state = cast(
+            dict[str, Any], journal.runtime_state("ohlcv_active_focus") or {}
+        )
         assert survivor in replaced_focus_state["mints"]
         assert unavailable not in replaced_focus_state["mints"]
         assert len(deep_calls) == 2
         assert set(deep_calls).issubset(replaced_focus_state["mints"])
         assert (
             replaced_focus_state["last_selected_at"][survivor]
-            == original_focus_state["last_selected_at"][survivor]
+            == cast(dict[str, object], original_focus_state["last_selected_at"])[survivor]
         )
         journal.set_runtime_state("ohlcv_retry_cooldown", {"entries": {}})
 
@@ -2686,7 +2702,9 @@ def test_collection_pins_market_ready_candidates_then_rotates_after_hour(
         collect_market_snapshots(
             journal, active_candidate_priority=lambda item: item["mint"] in ready
         )
-        next_focus = set((journal.runtime_state("ohlcv_active_focus") or {})["mints"])
+        next_focus = set(
+            cast(list[str], (journal.runtime_state("ohlcv_active_focus") or {})["mints"])
+        )
         assert len(next_focus) == 2
         assert not next_focus & pinned
 
@@ -2702,7 +2720,9 @@ def test_collection_pins_market_ready_candidates_then_rotates_after_hour(
         collect_market_snapshots(
             journal, active_candidate_priority=lambda item: item["mint"] in ready
         )
-        final_focus = set((journal.runtime_state("ohlcv_active_focus") or {})["mints"])
+        final_focus = set(
+            cast(list[str], (journal.runtime_state("ohlcv_active_focus") or {})["mints"])
+        )
         assert len(final_focus) == 2
         assert not final_focus & (pinned | next_focus)
 
@@ -2783,8 +2803,10 @@ def test_collection_retires_pins_that_cannot_fill_trade_backed_minutes(
             result = collect_market_snapshots(
                 journal, active_candidate_priority=lambda candidate: candidate["mint"] in ready
             )
-            focus = journal.runtime_state("ohlcv_active_focus") or {}
-            assert set(focus["mints"]).issubset(set(result["ohlcv_refreshed_mints"]))
+            focus = cast(dict[str, Any], journal.runtime_state("ohlcv_active_focus") or {})
+            assert set(focus["mints"]).issubset(
+                set(cast(list[str], result["ohlcv_refreshed_mints"]))
+            )
             if cycle < 2:
                 assert focus["mints"] == ready[:2]
                 assert result["strategy_focus_low_activity_excluded"] == 0
@@ -2857,7 +2879,7 @@ def test_new_candle_focus_requires_time_left_on_passing_audit(
         result = collect_market_snapshots(
             journal, active_candidate_priority=lambda candidate: candidate["mint"] in ready
         )
-        focus = journal.runtime_state("ohlcv_active_focus") or {}
+        focus = cast(dict[str, Any], journal.runtime_state("ohlcv_active_focus") or {})
         assert set(focus["mints"]) == set(ready[1:])
         assert result["strategy_focus_stale_audit_excluded"] == 1
 
@@ -3061,7 +3083,7 @@ def test_collection_budget_ramps_only_for_sustained_ready_backlog_and_reverts_on
         def candles(self, mint: str, pool: str, frame: str) -> list[PoolCandle]:
             nonlocal limit_next, empty_next, stale_next, cache_next
             calls.append((mint, frame))
-            paces.append(self.request_interval_seconds)
+            paces.append(cast(Any, self).request_interval_seconds)
             self.last_call_cache_hit = cache_next
             cache_next = False
             if limit_next:
@@ -3141,7 +3163,9 @@ def test_collection_budget_ramps_only_for_sustained_ready_backlog_and_reverts_on
         assert limited["ohlcv_request_budget_next"] == 4
         budget_after_limit = journal.runtime_state("ohlcv_request_budget") or {}
         assert budget_after_limit["limit"] == 4
-        assert int(budget_after_limit["higher_budget_retry_after"]) >= int(time.time()) + 86_390
+        assert (
+            cast(int, budget_after_limit["higher_budget_retry_after"]) >= int(time.time()) + 86_390
+        )
 
         journal.set_runtime_state("ohlcv_backoff", {"until": 0})
         # A restart can load a cooldown written by an older hourly policy.
@@ -3158,9 +3182,9 @@ def test_collection_budget_ramps_only_for_sustained_ready_backlog_and_reverts_on
             journal,
             active_candidate_priority=lambda item: item["mint"] in ready,
         )
-        assert held["ohlcv_requests_attempted"] <= 4
+        assert cast(int, held["ohlcv_requests_attempted"]) <= 4
         assert held["ohlcv_request_budget_next"] == 4
-        assert held["ohlcv_higher_budget_retry_after"] >= int(time.time()) + 86_390
+        assert cast(int, held["ohlcv_higher_budget_retry_after"]) >= int(time.time()) + 86_390
 
         journal.set_runtime_state("ohlcv_request_budget", {"limit": 8})
         before = len(calls)
@@ -3244,7 +3268,13 @@ def test_collection_budget_ramps_only_for_sustained_ready_backlog_and_reverts_on
             active_candidate_priority=lambda item: item["mint"] in ready,
         )
         assert expired["ohlcv_request_budget_next"] == 4
-        assert (journal.runtime_state("ohlcv_request_budget") or {})["fresh_network_successes"] <= 4
+        assert (
+            cast(
+                int,
+                (journal.runtime_state("ohlcv_request_budget") or {})["fresh_network_successes"],
+            )
+            <= 4
+        )
 
         # An old eight-call persisted value cannot exceed the six-call trial.
         journal.set_runtime_state("ohlcv_request_budget", {"limit": 8})
@@ -3252,5 +3282,5 @@ def test_collection_budget_ramps_only_for_sustained_ready_backlog_and_reverts_on
             journal,
             active_candidate_priority=lambda item: item["mint"] in ready,
         )
-        assert paced["ohlcv_requests_attempted"] <= 6
+        assert cast(int, paced["ohlcv_requests_attempted"]) <= 6
         assert paced["ohlcv_request_budget_next"] == 6

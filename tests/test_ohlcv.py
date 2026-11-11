@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, Literal, cast
 
 import httpx
 import pytest
@@ -84,7 +85,7 @@ def test_client_checks_candle_close_after_network_wait_and_preserves_explicit_cu
         clock["now"] = BASE + 61
         return httpx.Response(200, json=_payload([_row(BASE), _row(BASE + 60)]))
 
-    monkeypatch.setattr(ohlcv.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(cast(Any, ohlcv).time, "time", lambda: clock["now"])
     with (
         httpx.Client(
             base_url="https://api.geckoterminal.com", transport=httpx.MockTransport(respond)
@@ -149,7 +150,7 @@ def test_pool_market_parser_requires_exact_pool_and_token_identity() -> None:
         == []
     )
     assert parse_pool_markets({"data": [row]}, requested={MINT: str(Pubkey.new_unique())}) == []
-    row["attributes"]["reserve_in_usd"] = "-1"
+    cast(dict[str, object], row["attributes"])["reserve_in_usd"] = "-1"
     assert parse_pool_markets({"data": [row]}, requested={MINT: POOL}) == []
 
 
@@ -570,7 +571,7 @@ def test_point_in_time_loader_keeps_earlier_derived_bar_when_direct_arrives_late
 
 @pytest.mark.parametrize(("timeframe", "period"), [("15m", 900), ("1h", 3_600)])
 def test_higher_timeframe_uses_only_complete_real_minute_bars(
-    tmp_path: Path, timeframe: str, period: int
+    tmp_path: Path, timeframe: Literal["15m", "1h"], period: int
 ) -> None:
     bucket = BASE - BASE % period
     minute_count = period // 60

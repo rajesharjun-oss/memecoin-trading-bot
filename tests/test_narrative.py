@@ -5,6 +5,7 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -416,7 +417,7 @@ def test_refresh_links_stored_exact_callout_to_known_older_candidate(tmp_path: P
     assert signal["mint"] == known_mint
     assert signal["latest_mention_at"] == published_at
     assert signal["confidence"] == "medium"
-    assert "social_only_evidence" in signal["risk_flags"]
+    assert "social_only_evidence" in cast(list[str], signal["risk_flags"])
 
 
 def test_existing_narrative_signal_table_adds_mention_time_safely(tmp_path: Path) -> None:
@@ -495,8 +496,8 @@ def test_narrative_refresh_history_preserves_prior_signal_and_explicit_absence(
         ).fetchone()[0]
         earlier = journal.narrative_signal_before(mint, decision_at_us=first)
         assert earlier is not None
-        assert earlier["signal"]["confidence"] == "high"
-        assert earlier["signal"]["risk_flags"] == ["security_claim_present"]
+        assert cast(dict[str, Any], earlier["signal"])["confidence"] == "high"
+        assert cast(dict[str, Any], earlier["signal"])["risk_flags"] == ["security_claim_present"]
 
         time.sleep(0.002)
         journal.replace_narrative_signals([])
