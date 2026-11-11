@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,7 +24,7 @@ def exclusive_worker_lock(state_path: Path) -> Iterator[None]:
     path = state_path.resolve().with_name(f"{state_path.name}.workers.lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
-        if os.name == "nt":
+        if sys.platform == "win32":
             import msvcrt
 
             if handle.seek(0, os.SEEK_END) == 0:
