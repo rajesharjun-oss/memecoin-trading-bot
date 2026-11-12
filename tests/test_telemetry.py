@@ -81,13 +81,17 @@ def test_http_classification_and_quote_only_filter(
     def respond(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/timeout":
             raise httpx.ReadTimeout("synthetic timeout", request=request)
+        if request.url.path == "/transport":
+            raise httpx.ConnectError("synthetic connection error", request=request)
         return httpx.Response(int(request.url.path.removeprefix("/")))
 
     with telemetry.http_client("ohlcv", transport=httpx.MockTransport(respond)) as client:
-        for status in (200, 429, 503, 400):
+        for status in (200, 429, 503, 400, 404, 302):
             client.get(f"https://feed.example.test/{status}")
         with pytest.raises(httpx.ReadTimeout):
             client.get("https://feed.example.test/timeout")
+        with pytest.raises(httpx.ConnectError):
+            client.get("https://feed.example.test/transport")
     with telemetry.http_client(
         "jupiter_quote",
         transport=httpx.MockTransport(lambda _request: httpx.Response(200)),
@@ -96,7 +100,14 @@ def test_http_classification_and_quote_only_filter(
         client.get("https://api.example.test/swap/v2/order")
         client.post("https://api.example.test/swap/v2/execute")
     counts = _counts(recorder)
-    assert [counts[("ohlcv", outcome)] for outcome in telemetry.HTTP_OUTCOMES] == [1, 1, 1, 1, 1]
+    assert [counts[("ohlcv", outcome)] for outcome in telemetry.HTTP_OUTCOMES] == [
+        1,
+        1,
+        1,
+        1,
+        1,
+        3,
+    ]
     assert counts[("jupiter_quote", "ok")] == 2
 
 
@@ -178,9 +189,13 @@ def test_report_pass_fail_undefined_and_exact_window(
     recorder.add("mark_quotes", "attempted", 20, at=end - 3_600)
     recorder.add("mark_quotes", "succeeded", 19, at=end - 3_600)
     recorder.add("ohlcv", "http_429", at=end - 3_600)
+    recorder.add("ohlcv", "http_4xx", 20, at=end - 3_600)
     recorder.flush()
     report = telemetry.telemetry_report(recorder.state_path, 24, now=end)
     assert report["overall"] == "pass"
+    assert report["endpoints"]["ohlcv"]["failure_rate_pct"] < 5  # type: ignore[index]  # Typed JSON dict.
+    assert report["endpoints"]["ohlcv"]["http_4xx"] == 20  # type: ignore[index]  # Typed JSON dict.
+    assert report["endpoints"]["ohlcv"]["http_4xx_rate_pct"] > 0  # type: ignore[index]  # Typed JSON dict.
     recorder.add("capacity", "ready_mint_seconds", 120, at=end - 3_600)
     recorder.add("candles", "missing", at=end - 3_600)
     recorder.add("exit_marks", "missed", at=end - 3_600)
@@ -194,6 +209,49 @@ def test_report_pass_fail_undefined_and_exact_window(
     assert report["gates"]["exit_marks"] == "fail"  # type: ignore[index]  # Typed JSON dict.
     assert report["gates"]["mark_quote_success"] == "fail"  # type: ignore[index]  # Typed JSON dict.
     assert report["gates"]["ohlcv_capacity"] == "fail"  # type: ignore[index]  # Typed JSON dict.
+
+
+def test_legacy_other_error_rows_are_excluded_from_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _recorder(tmp_path, monkeypatch)
+    end = int(time.time()) // 3_600 * 3_600
+    with sqlite3.connect(recorder.state_path) as connection:
+        connection.execute(
+            "CREATE TABLE telemetry_hourly (hour_start INTEGER NOT NULL, metric TEXT NOT NULL, "
+            "outcome TEXT NOT NULL, count INTEGER NOT NULL, "
+            "PRIMARY KEY (hour_start, metric, outcome))"
+        )
+        connection.execute(
+            "INSERT INTO telemetry_hourly (hour_start, metric, outcome, count) VALUES (?, ?, ?, ?)",
+            (end - 3_600, "ohlcv", "other_error", 100),
+        )
+    recorder.add("ohlcv", "ok", 20, at=end - 3_600)
+    recorder.add("ohlcv", "http_4xx", 10, at=end - 3_600)
+    recorder.add("ohlcv", "http_429", at=end - 3_600)
+    recorder.flush()
+    report = telemetry.telemetry_report(recorder.state_path, 24, now=end)
+    endpoint = report["endpoints"]["ohlcv"]  # type: ignore[index]  # Typed JSON dict.
+    assert endpoint["attempts"] == 31
+    assert endpoint["failures"] == 1
+    assert endpoint["legacy_other_error_ignored"] == 100
+    assert report["gates"]["ohlcv_errors"] == "undefined"  # type: ignore[index]  # Unknown legacy outcomes cannot pass.
+
+
+def test_endpoint_failure_gate_requires_strictly_below_five_percent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _recorder(tmp_path, monkeypatch)
+    end = int(time.time()) // 3_600 * 3_600
+    recorder.add("rpc", "ok", 19, at=end - 3_600)
+    recorder.add("rpc", "transport_error", at=end - 3_600)
+    recorder.flush()
+    report = telemetry.telemetry_report(recorder.state_path, 24, now=end)
+    assert report["gates"]["rpc_errors"] == "fail"  # type: ignore[index]  # Typed JSON dict.
+    recorder.add("rpc", "ok", at=end - 3_600)
+    recorder.flush()
+    report = telemetry.telemetry_report(recorder.state_path, 24, now=end)
+    assert report["gates"]["rpc_errors"] == "pass"  # type: ignore[index]  # Typed JSON dict.
 
 
 def test_report_is_read_only_and_rejects_bad_hours(tmp_path: Path) -> None:

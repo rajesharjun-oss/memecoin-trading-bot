@@ -25,7 +25,8 @@ FLUSH_SECONDS = 300
 RETENTION_SECONDS = 7 * 24 * 3_600
 TARGET_REFRESH_SECONDS = 120  # Existing operations.py minimum 1m-candle capacity rule.
 ENDPOINTS = ("ohlcv", "dexscreener", "jupiter_quote", "rpc")
-HTTP_OUTCOMES = ("ok", "http_429", "http_5xx", "timeout", "other_error")
+HTTP_OUTCOMES = ("ok", "http_429", "http_5xx", "timeout", "transport_error", "http_4xx")
+GATED_FAILURES = ("http_429", "http_5xx", "timeout", "transport_error")
 LABELS = {
     **{endpoint: frozenset(HTTP_OUTCOMES) for endpoint in ENDPOINTS},
     "candles": frozenset(("fresh", "stale", "missing")),
@@ -43,7 +44,7 @@ CREATE TABLE IF NOT EXISTS telemetry_hourly (
         'candles', 'exit_marks', 'mark_quotes', 'capacity'
     )),
     outcome TEXT NOT NULL CHECK (outcome IN (
-        'ok', 'http_429', 'http_5xx', 'timeout', 'other_error',
+        'ok', 'http_429', 'http_5xx', 'timeout', 'transport_error', 'http_4xx',
         'fresh', 'stale', 'missing', 'missed', 'attempted',
         'succeeded', 'ready_mint_seconds', 'successful_calls',
         'cycles', 'observed_cycle_seconds'
@@ -180,7 +181,7 @@ def _outcome(status_code: int) -> str:
         return "http_5xx"
     if 200 <= status_code < 300:
         return "ok"
-    return "other_error"
+    return "http_4xx"
 
 
 class _MeasuredClient(httpx.Client):
@@ -203,7 +204,7 @@ class _MeasuredClient(httpx.Client):
             raise
         except httpx.RequestError:
             if endpoint:
-                _safe_add(endpoint, "other_error")
+                _safe_add(endpoint, "transport_error")
             raise
         if endpoint:
             _safe_add(endpoint, _outcome(response.status_code))
@@ -304,6 +305,7 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
     end = _hour(int(time.time()) if now is None else now)
     start = end - hours * 3_600
     counts: Counter[tuple[str, str]] = Counter()
+    legacy_ignored: Counter[str] = Counter()
     hourly_counts: dict[int, Counter[tuple[str, str]]] = {}
     hours_seen: set[int] = set()
     try:
@@ -318,6 +320,9 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
     except (OSError, sqlite3.Error):
         rows = []
     for hour, metric, outcome, count in rows:
+        if metric in ENDPOINTS and outcome == "other_error" and type(count) is int and count >= 0:
+            legacy_ignored[metric] += count
+            continue
         if metric in LABELS and outcome in LABELS[metric] and type(count) is int and count >= 0:
             counts[(metric, outcome)] += count
             hourly_counts.setdefault(hour, Counter())[(metric, outcome)] += count
@@ -328,15 +333,24 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
     for endpoint in ENDPOINTS:
         outcomes = {outcome: counts[(endpoint, outcome)] for outcome in HTTP_OUTCOMES}
         attempts = sum(outcomes.values())
-        errors = attempts - outcomes["ok"]
-        rate = round(errors * 100 / attempts, 3) if attempts else None
+        failures = sum(outcomes[outcome] for outcome in GATED_FAILURES)
+        failure_rate = round(failures * 100 / attempts, 3) if attempts else None
         endpoint_results[endpoint] = {
             **outcomes,
             "attempts": attempts,
-            "error_rate_pct": rate,
+            "failures": failures,
+            "failure_rate_pct": failure_rate,
+            "http_4xx_rate_pct": round(outcomes["http_4xx"] * 100 / attempts, 3)
+            if attempts
+            else None,
+            "legacy_other_error_ignored": legacy_ignored[endpoint],
         }
         gates[f"{endpoint}_errors"] = (
-            "pass" if attempts and errors * 20 < attempts else "fail" if attempts else "undefined"
+            "undefined"
+            if not attempts or legacy_ignored[endpoint]
+            else "pass"
+            if failures * 20 < attempts
+            else "fail"
         )
     candle_counts = {outcome: counts[("candles", outcome)] for outcome in LABELS["candles"]}
     candle_total = sum(candle_counts.values())
@@ -453,8 +467,14 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
             "Only the last fully completed UTC hours are included.",
             "A candidate lacking audit, market, or candle evidence counts as missing, never fresh.",
             "HTTP ok means a 2xx response, not proof that returned market data was valid.",
+            "Endpoint failure gates count 429, 5xx, timeout, and transport errors only; "
+            "other HTTP statuses are reported as http_4xx and are ungated.",
+            "High http_4xx may reflect thin markets or no routes, not a feed outage.",
+            "Legacy other_error rows are excluded from attempts and failures; affected "
+            "endpoint gates remain undefined because those outcomes cannot be reclassified.",
             "OHLCV demand uses the existing 120-second market-ready mint minimum; "
-            "research and higher-timeframe calls add demand.",
+            "research and higher-timeframe calls add demand. Passing is necessary, not sufficient; "
+            "failing means measured capacity is below even this minimum.",
             "No open-position marks or endpoint requests makes that gate undefined, not passed.",
         ],
     }
