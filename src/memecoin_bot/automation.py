@@ -23,6 +23,7 @@ from .strategy import (
     paper_entry_breakers,
     run_paper_decision_cycle,
 )
+from .telemetry import record_exit_marks
 
 LOGGER = logging.getLogger(__name__)
 
@@ -186,6 +187,7 @@ def run_paper_exit_cycle(
 ) -> dict[str, Any]:
     """Refresh executable quotes and apply paper exits independently of discovery."""
     portfolio = paper.portfolio(refresh=True)
+    record_exit_marks(portfolio["positions"])
     quote_failures = record_paper_quote_health(journal, portfolio["positions"])
     exit_results: list[dict[str, object]] = []
     current_positions = {
@@ -259,6 +261,7 @@ def run_paper_exit_cycle(
                 # A partial sale changes the remaining size and can change route
                 # impact. Do not cascade TP stages from the pre-sale full-bag mark.
                 refreshed = paper.portfolio(refresh=True)
+                record_exit_marks(refreshed["positions"])
                 quote_failures = record_paper_quote_health(journal, refreshed["positions"])
                 current_positions = {
                     str(current.get("position_id")): current for current in refreshed["positions"]

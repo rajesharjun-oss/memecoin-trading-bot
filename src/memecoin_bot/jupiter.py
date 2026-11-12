@@ -8,6 +8,7 @@ from solders.pubkey import Pubkey
 
 from .constants import WSOL_MINT
 from .models import RouteQuote
+from .telemetry import http_client
 
 
 class JupiterError(RuntimeError):
@@ -21,7 +22,8 @@ class JupiterClient:
         headers = {"Accept": "application/json", "User-Agent": "memecoin-bot/0.1"}
         if api_key:
             headers["x-api-key"] = api_key
-        self._client = httpx.Client(
+        self._client = http_client(
+            "jupiter_quote",
             base_url=self.BASE_URL,
             headers=headers,
             timeout=httpx.Timeout(timeout_seconds, connect=5.0),

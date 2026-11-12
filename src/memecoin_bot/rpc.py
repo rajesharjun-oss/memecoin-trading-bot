@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from .telemetry import http_client
+
 
 class RpcError(RuntimeError):
     """Raised for transport, protocol, or Solana RPC errors."""
@@ -46,7 +48,8 @@ class RpcClient:
         self._ids = itertools.count(1)
         self._request_counts: Counter[str] = Counter()
         self._request_counts_lock = threading.Lock()
-        self._client = httpx.Client(
+        self._client = http_client(
+            "rpc",
             timeout=httpx.Timeout(timeout_seconds, connect=5.0),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
             follow_redirects=False,

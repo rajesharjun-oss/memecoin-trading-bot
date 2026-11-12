@@ -10,6 +10,8 @@ from typing import Any, Literal
 import httpx
 from solders.pubkey import Pubkey
 
+from .telemetry import http_client
+
 TIMEFRAME_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 _GECKO_PERIOD = {"1m": ("minute", 1), "5m": ("minute", 5), "15m": ("minute", 15), "1h": ("hour", 1)}
 
@@ -255,7 +257,8 @@ class GeckoTerminalOhlcvClient:
             else {"Accept": "application/json;version=20230203"}
         )
         self._headers = headers
-        self._client = client or httpx.Client(
+        self._client = client or http_client(
+            "ohlcv",
             base_url=base_url,
             headers=headers,
             timeout=httpx.Timeout(12.0, connect=4.0),
