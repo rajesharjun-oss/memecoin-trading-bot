@@ -24,6 +24,7 @@ from .strategy_lab import (
     load_verified_candles,
     multi_frame_entry_verdict,
 )
+from .telemetry import record_candidate_evaluations
 
 MAX_NARRATIVE_AGE_SECONDS = 900
 MAX_NARRATIVE_MENTION_AGE_SECONDS = 3_600
@@ -617,6 +618,7 @@ def run_paper_decision_cycle(
                 candidate, evaluate_candidate(candidate, settings), settings, journal
             )
         )
+    record_candidate_evaluations([decision.evidence for decision in decisions])
     decisions.sort(key=lambda decision: decision.score, reverse=True)
     opened: dict[str, Any] | None = None
     ranked_decisions: list[StrategyDecision] = []

@@ -28,6 +28,7 @@ from .pump_fun import PumpFunClient, PumpFunError
 from .rpc import RpcClient, RpcError
 from .service import TradingService, audit_as_dict
 from .strategy_lab import RESEARCH_COHORT_KEY, research_cohort_mints
+from .telemetry import record_mark_quote_attempt, record_mark_quote_success
 
 if TYPE_CHECKING:
     from .execution import PaperFillEstimate
@@ -789,7 +790,9 @@ class PaperTradingService:
                     while True:
                         quote_attempts += 1
                         quote_started_at = datetime.now(UTC)
+                        record_mark_quote_attempt()
                         quote = self._exit_quote(position, remaining_tokens, mark_slippage_bps)
+                        record_mark_quote_success()
                         try:
                             mark = self.execution.estimate(
                                 quote=quote,

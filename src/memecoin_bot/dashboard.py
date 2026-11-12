@@ -83,6 +83,7 @@ from .strategy_lab import (
     research_focus_size,
     run_backtest,
 )
+from .telemetry import record_market_cycle
 from .transaction import SubmissionUncertainError, TransactionError
 from .verification import summarize_current_entry_readiness, summarize_current_research_capture
 from .wallet import WalletError, load_keypair
@@ -564,6 +565,12 @@ def create_dashboard_app(settings: Settings, pairing_code: str) -> FastAPI:
                 active_candidate_priority=lambda candidate: (
                     evaluate_candidate(candidate, settings).verdict == "eligible"
                 ),
+            )
+            record_market_cycle(
+                result.get("market_ready_mints"),
+                result.get("ohlcv_requests_succeeded"),
+                result.get("ohlcv_cache_hits"),
+                settings.strategy_lab_collection_interval_seconds,
             )
             refreshed = result.get("ohlcv_refreshed_mints")
             opportunities = (
