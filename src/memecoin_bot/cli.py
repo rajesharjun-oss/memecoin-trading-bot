@@ -26,6 +26,7 @@ from .research_history import backfill_research_candles
 from .rpc import RpcClient, RpcError
 from .service import RiskRejectedError, TradingService, audit_as_dict
 from .strategy_lab import RESEARCH_SELECTION_METHOD
+from .telemetry import configure_paper_telemetry, telemetry_report
 from .transaction import SubmissionUncertainError, TransactionError
 from .wallet import WalletError, load_keypair
 
@@ -345,6 +346,8 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
             "Free-only dashboard requires LIVE_TRADING_ENABLED=false and "
             "NARRATIVE_OPENAI_ENABLED=false"
         )
+    if not settings.live_trading_enabled:
+        configure_paper_telemetry(settings.state_path)
     run_dashboard(settings, port=args.port, open_browser=not args.no_browser)
     return 0
 
@@ -363,6 +366,14 @@ def _cmd_paper_health(args: argparse.Namespace) -> int:
     healthy, issues = paper_worker_health(_settings(args.env_file))
     _json({"healthy": healthy, "issues": issues})
     return 0 if healthy else 1
+
+
+def _cmd_telemetry_report(args: argparse.Namespace) -> int:
+    settings = _settings(args.env_file)
+    if settings.live_trading_enabled:
+        raise ConfigurationError("Telemetry report requires paper mode")
+    _json(telemetry_report(settings.state_path, args.hours))
+    return 0
 
 
 def _cmd_init_paper_identity(args: argparse.Namespace) -> int:
@@ -488,6 +499,11 @@ def build_parser() -> argparse.ArgumentParser:
     alerts.set_defaults(func=_cmd_alerts)
     health = commands.add_parser("paper-health", help="check unattended paper-worker freshness")
     health.set_defaults(func=_cmd_paper_health)
+    telemetry = commands.add_parser(
+        "telemetry-report", help="summarize bounded paper data-feed telemetry"
+    )
+    telemetry.add_argument("--hours", type=int, required=True)
+    telemetry.set_defaults(func=_cmd_telemetry_report)
     identity = commands.add_parser(
         "init-paper-identity", help="create an unfunded identity in the paper-state volume"
     )

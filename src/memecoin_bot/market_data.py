@@ -7,6 +7,8 @@ from typing import Any
 import httpx
 from solders.pubkey import Pubkey
 
+from .telemetry import http_client
+
 
 class MarketDataError(RuntimeError):
     """Raised when the fixed market-data provider returns unsafe data."""
@@ -83,7 +85,8 @@ class DexScreenerClient:
     BASE_URL = "https://api.dexscreener.com"
 
     def __init__(self, *, timeout_seconds: float = 8.0) -> None:
-        self._client = httpx.Client(
+        self._client = http_client(
+            "dexscreener",
             base_url=self.BASE_URL,
             headers={"Accept": "application/json", "User-Agent": "memecoin-bot/0.1"},
             timeout=httpx.Timeout(timeout_seconds, connect=4.0),

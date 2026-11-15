@@ -1178,6 +1178,7 @@ def collect_market_snapshots(
         "priority_safe_tracked": len(set(priority_safe) & set(mints)),
         "active_watchlist_size": len(active_mints),
         "active_market_ready_size": len(set(active_mints) & set(ready_mints)),
+        "market_ready_mints": len(ready_mints),
         "collection_lane": lane,
         "direct_5m_repair_scheduled": direct_5m_repair is not None,
         "direct_5m_repair_attempted": direct_5m_repair_attempted,
