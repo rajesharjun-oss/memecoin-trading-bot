@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping
 from math import prod
@@ -8,6 +10,40 @@ from typing import Any
 
 from .ohlcv import TIMEFRAME_SECONDS
 from .strategy_lab import Candle, FactorName, StrategyLabError, Timeframe, run_backtest
+
+
+def _ohlcv_fingerprint(candles: list[Candle]) -> str:
+    digest = hashlib.sha256(b"memecoin-bot-ohlcv-v1\n")
+    for candle in candles:
+        row = json.dumps(
+            candle.as_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        digest.update(row.encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _ohlcv_provenance(
+    candles: list[Candle],
+    timeframe: Timeframe,
+    confirmation_frames: Mapping[Timeframe, list[Candle]] | None,
+) -> dict[str, object]:
+    return {
+        "method": "sha256-canonical-candle-rows-v1",
+        "entry": {
+            "timeframe": timeframe,
+            "count": len(candles),
+            "sha256": _ohlcv_fingerprint(candles),
+        },
+        "confirmation": {
+            frame: {"count": len(rows), "sha256": _ohlcv_fingerprint(rows)}
+            for frame, rows in sorted((confirmation_frames or {}).items())
+        },
+    }
 
 
 def _objective(result: dict[str, Any]) -> float:
@@ -127,6 +163,7 @@ def run_walk_forward_evaluation(
     parity_flags = {
         "historical_market_gate_parity": False,
         "paper_entry_schedule_parity": False,
+        "ohlcv_provenance": _ohlcv_provenance(candles, timeframe, confirmation_frames),
     }
     if entry_windows == ():
         return {
