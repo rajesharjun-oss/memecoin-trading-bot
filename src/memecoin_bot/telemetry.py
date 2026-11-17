@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import atexit
 import logging
+import re
 import sqlite3
 import threading
 import time
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +37,29 @@ LABELS = {
         ("ready_mint_seconds", "successful_calls", "cycles", "observed_cycle_seconds")
     ),
 }
+RPC_METHODS = frozenset(
+    (
+        "getSignaturesForAddress",
+        "getTransaction",
+        "getMultipleAccounts",
+        "getTokenLargestAccounts",
+        "getAccountInfo",
+        "getTokenAccountsByOwner",
+        "getBalance",
+        "other",
+    )
+)
+FOCUS_STATUSES = frozenset(("ready", "stale", "gap", "collecting", "invalid", "missing"))
+DIAGNOSTIC_LABELS = {
+    "rpc_method": RPC_METHODS,
+    "focus_candle": frozenset(("1m", "5m")),
+    "focus_market": frozenset(("eligible", "ineligible")),
+    "focus_schedule": frozenset(("selected", "scheduled", "cycles")),
+}
+DIAGNOSTIC_OUTCOMES = frozenset((*HTTP_OUTCOMES, *FOCUS_STATUSES, "count"))
+_RPC_METHOD_PREFIX = re.compile(
+    rb'^\s*\{\s*"jsonrpc"\s*:\s*"2\.0"\s*,\s*"id"\s*:\s*\d+\s*,\s*"method"\s*:\s*"([A-Za-z][A-Za-z0-9]{0,39})"'
+)
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS telemetry_hourly (
     hour_start INTEGER NOT NULL,
@@ -51,6 +75,26 @@ CREATE TABLE IF NOT EXISTS telemetry_hourly (
     )),
     count INTEGER NOT NULL CHECK (count >= 0),
     PRIMARY KEY (hour_start, metric, outcome)
+)
+"""
+_CREATE_DIAGNOSTICS_TABLE = """
+CREATE TABLE IF NOT EXISTS telemetry_diagnostics_hourly (
+    hour_start INTEGER NOT NULL,
+    category TEXT NOT NULL CHECK (category IN (
+        'rpc_method', 'focus_candle', 'focus_market', 'focus_schedule'
+    )),
+    label TEXT NOT NULL CHECK (label IN (
+        'getSignaturesForAddress', 'getTransaction', 'getMultipleAccounts',
+        'getTokenLargestAccounts', 'getAccountInfo', 'getTokenAccountsByOwner',
+        'getBalance', 'other', '1m', '5m', 'eligible', 'ineligible',
+        'selected', 'scheduled', 'cycles'
+    )),
+    outcome TEXT NOT NULL CHECK (outcome IN (
+        'ok', 'http_429', 'http_5xx', 'timeout', 'transport_error', 'http_4xx',
+        'ready', 'stale', 'gap', 'collecting', 'invalid', 'missing', 'count'
+    )),
+    count INTEGER NOT NULL CHECK (count >= 0),
+    PRIMARY KEY (hour_start, category, label, outcome)
 )
 """
 
@@ -69,6 +113,7 @@ class HourlyTelemetry:
     def __init__(self, state_path: Path) -> None:
         self.state_path = state_path
         self._pending: Counter[tuple[int, str, str]] = Counter()
+        self._pending_diagnostics: Counter[tuple[int, str, str, str]] = Counter()
         self._lock = threading.Lock()
         self._flush_lock = threading.Lock()
         self._stop = threading.Event()
@@ -82,6 +127,29 @@ class HourlyTelemetry:
         hour = _hour(int(time.time()) if at is None else at)
         with self._lock:
             self._pending[(hour, metric, outcome)] += count
+
+    def add_diagnostic(
+        self, category: str, label: str, outcome: str, count: int = 1, *, at: int | None = None
+    ) -> None:
+        allowed_outcomes = (
+            HTTP_OUTCOMES
+            if category == "rpc_method"
+            else FOCUS_STATUSES
+            if category == "focus_candle"
+            else ("count",)
+        )
+        if (
+            label not in DIAGNOSTIC_LABELS.get(category, ())
+            or outcome not in allowed_outcomes
+            or type(count) is not int
+            or count < 0
+        ):
+            raise ValueError("Invalid diagnostic counter")
+        if count == 0:
+            return
+        hour = _hour(int(time.time()) if at is None else at)
+        with self._lock:
+            self._pending_diagnostics[(hour, category, label, outcome)] += count
 
     def market_cycle(self, ready: int, achieved: int, interval_seconds: int) -> None:
         if min(ready, achieved, interval_seconds) < 0 or interval_seconds == 0:
@@ -113,10 +181,15 @@ class HourlyTelemetry:
                     if key[0] < cutoff:
                         del self._pending[key]
                 batch = dict(self._pending)
+                for diagnostic_key in list(self._pending_diagnostics):
+                    if diagnostic_key[0] < cutoff:
+                        del self._pending_diagnostics[diagnostic_key]
+                diagnostics_batch = dict(self._pending_diagnostics)
             connection = sqlite3.connect(self.state_path, timeout=0.2)
             try:
                 with connection:
                     connection.execute(_CREATE_TABLE)
+                    connection.execute(_CREATE_DIAGNOSTICS_TABLE)
                     if batch:
                         connection.executemany(
                             "INSERT INTO telemetry_hourly (hour_start, metric, outcome, count) "
@@ -130,6 +203,26 @@ class HourlyTelemetry:
                     connection.execute(
                         "DELETE FROM telemetry_hourly WHERE hour_start < ?", (cutoff,)
                     )
+                    if diagnostics_batch:
+                        connection.executemany(
+                            "INSERT INTO telemetry_diagnostics_hourly "
+                            "(hour_start, category, label, outcome, count) "
+                            "VALUES (?, ?, ?, ?, ?) "
+                            "ON CONFLICT(hour_start, category, label, outcome) "
+                            "DO UPDATE SET count = count + excluded.count",
+                            (
+                                (hour, category, label, outcome, count)
+                                for (
+                                    hour,
+                                    category,
+                                    label,
+                                    outcome,
+                                ), count in diagnostics_batch.items()
+                            ),
+                        )
+                    connection.execute(
+                        "DELETE FROM telemetry_diagnostics_hourly WHERE hour_start < ?", (cutoff,)
+                    )
             finally:
                 connection.close()
             with self._lock:
@@ -137,6 +230,10 @@ class HourlyTelemetry:
                     self._pending[key] -= count
                     if self._pending[key] <= 0:
                         del self._pending[key]
+                for diagnostic_key, count in diagnostics_batch.items():
+                    self._pending_diagnostics[diagnostic_key] -= count
+                    if self._pending_diagnostics[diagnostic_key] <= 0:
+                        del self._pending_diagnostics[diagnostic_key]
         except Exception as exc:
             LOGGER.warning("Telemetry flush failed (%s)", type(exc).__name__)
         finally:
@@ -174,6 +271,26 @@ def _safe_add(metric: str, outcome: str, count: int = 1) -> None:
         LOGGER.warning("Telemetry counter failed (%s)", type(exc).__name__)
 
 
+def _safe_add_diagnostic(category: str, label: str, outcome: str, count: int = 1) -> None:
+    try:
+        if _recorder is not None:
+            _recorder.add_diagnostic(category, label, outcome, count)
+    except Exception as exc:
+        LOGGER.warning("Diagnostic counter failed (%s)", type(exc).__name__)
+
+
+def _rpc_method(request: httpx.Request) -> str:
+    # Read only the fixed JSON-RPC envelope prefix; never retain params or URL.
+    try:
+        match = _RPC_METHOD_PREFIX.match(request.content[:160])
+    except httpx.RequestNotRead:
+        return "other"
+    if match is None:
+        return "other"
+    method = match.group(1).decode("ascii")
+    return method if method in RPC_METHODS else "other"
+
+
 def _outcome(status_code: int) -> str:
     if status_code == 429:
         return "http_429"
@@ -191,6 +308,7 @@ class _MeasuredClient(httpx.Client):
 
     def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
         endpoint = self._telemetry_endpoint
+        rpc_method = _rpc_method(request) if endpoint == "rpc" else None
         if endpoint == "jupiter_quote" and not (
             request.method == "GET"
             and request.url.path in ("/swap/v2/build", "/swap/v2/order", "/swap/v1/quote")
@@ -201,13 +319,20 @@ class _MeasuredClient(httpx.Client):
         except httpx.TimeoutException:
             if endpoint:
                 _safe_add(endpoint, "timeout")
+                if rpc_method is not None:
+                    _safe_add_diagnostic("rpc_method", rpc_method, "timeout")
             raise
         except httpx.RequestError:
             if endpoint:
                 _safe_add(endpoint, "transport_error")
+                if rpc_method is not None:
+                    _safe_add_diagnostic("rpc_method", rpc_method, "transport_error")
             raise
         if endpoint:
-            _safe_add(endpoint, _outcome(response.status_code))
+            outcome = _outcome(response.status_code)
+            _safe_add(endpoint, outcome)
+            if rpc_method is not None:
+                _safe_add_diagnostic("rpc_method", rpc_method, outcome)
         return response
 
 
@@ -240,6 +365,17 @@ def record_market_cycle(
         LOGGER.warning("Market telemetry failed (%s)", type(exc).__name__)
 
 
+def record_focus_schedule(selected: object, scheduled: object) -> None:
+    """Count selected and scheduled focus slots without storing mint addresses."""
+    if type(selected) is not int or type(scheduled) is not int:
+        return
+    if not 0 <= scheduled <= selected <= 2:
+        return
+    _safe_add_diagnostic("focus_schedule", "cycles", "count")
+    _safe_add_diagnostic("focus_schedule", "selected", "count", selected)
+    _safe_add_diagnostic("focus_schedule", "scheduled", "count", scheduled)
+
+
 _UNUSABLE_CANDLE_STATUSES = frozenset(
     (
         "stale",
@@ -252,13 +388,56 @@ _UNUSABLE_CANDLE_STATUSES = frozenset(
 )
 
 
-def record_candidate_evaluations(evidence_rows: Sequence[Mapping[str, object]]) -> None:
+def record_candidate_evaluations(
+    evidence_rows: Sequence[Mapping[str, object]],
+    *,
+    focus_state_loader: Callable[[], Mapping[str, object] | None] | None = None,
+) -> None:
     """Count every market-eligible evaluation; unverified candles never count as fresh."""
     try:
+        if _recorder is None:
+            return
+        try:
+            focus = focus_state_loader() if focus_state_loader is not None else None
+        except Exception as exc:
+            LOGGER.warning("Focus telemetry lookup failed (%s)", type(exc).__name__)
+            focus = None
+        selected_at = focus.get("selected_at") if isinstance(focus, Mapping) else None
+        raw_mints = focus.get("mints") if isinstance(focus, Mapping) else None
+        focused_mints = (
+            frozenset(mint for mint in raw_mints if isinstance(mint, str))
+            if type(selected_at) is int
+            and 0 <= int(time.time()) - selected_at < 3_600
+            and isinstance(raw_mints, list)
+            else frozenset()
+        )
         for evidence in evidence_rows:
+            inputs = evidence.get("market_gate_inputs")
+            mint = inputs.get("mint") if isinstance(inputs, dict) else None
+            focused = isinstance(mint, str) and mint in focused_mints
+            if focused:
+                _safe_add_diagnostic(
+                    "focus_market",
+                    "eligible"
+                    if evidence.get("market_gate_verdict") == "eligible"
+                    else "ineligible",
+                    "count",
+                )
             if evidence.get("market_gate_verdict") != "eligible":
                 continue
             raw_signals = evidence.get("candle_signals")
+            if focused:
+                for frame in ("1m", "5m"):
+                    signal = raw_signals.get(frame) if isinstance(raw_signals, dict) else None
+                    status = signal.get("status") if isinstance(signal, dict) else None
+                    outcome = (
+                        status
+                        if isinstance(status, str) and status in FOCUS_STATUSES
+                        else "invalid"
+                        if status is not None
+                        else "missing"
+                    )
+                    _safe_add_diagnostic("focus_candle", frame, outcome)
             if not isinstance(raw_signals, dict):
                 _safe_add("candles", "missing")
                 continue
@@ -305,6 +484,9 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
     end = _hour(int(time.time()) if now is None else now)
     start = end - hours * 3_600
     counts: Counter[tuple[str, str]] = Counter()
+    diagnostics: Counter[tuple[str, str, str]] = Counter()
+    diagnostic_hours: set[int] = set()
+    diagnostics_available = False
     legacy_ignored: Counter[str] = Counter()
     hourly_counts: dict[int, Counter[tuple[str, str]]] = {}
     hours_seen: set[int] = set()
@@ -317,8 +499,28 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
                 "WHERE hour_start >= ? AND hour_start < ?",
                 (start, end),
             ).fetchall()
+            try:
+                diagnostic_rows = connection.execute(
+                    "SELECT hour_start, category, label, outcome, count "
+                    "FROM telemetry_diagnostics_hourly "
+                    "WHERE hour_start >= ? AND hour_start < ?",
+                    (start, end),
+                ).fetchall()
+                diagnostics_available = True
+            except sqlite3.OperationalError:
+                diagnostic_rows = []  # Existing journals predate this additive table.
     except (OSError, sqlite3.Error):
         rows = []
+        diagnostic_rows = []
+    for hour, category, label, outcome, count in diagnostic_rows:
+        if (
+            label in DIAGNOSTIC_LABELS.get(category, ())
+            and outcome in DIAGNOSTIC_OUTCOMES
+            and type(count) is int
+            and count >= 0
+        ):
+            diagnostics[(category, label, outcome)] += count
+            diagnostic_hours.add(hour)
     for hour, metric, outcome, count in rows:
         if metric in ENDPOINTS and outcome == "other_error" and type(count) is int and count >= 0:
             legacy_ignored[metric] += count
@@ -410,6 +612,37 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
         "collector_observed_seconds": observed_seconds,
         "window_complete": complete,
         "endpoints": endpoint_results,
+        "diagnostics": {
+            "available": diagnostics_available,
+            "observed_hours": len(diagnostic_hours),
+            "rpc_methods": {
+                method: {
+                    **{
+                        outcome: diagnostics[("rpc_method", method, outcome)]
+                        for outcome in HTTP_OUTCOMES
+                    },
+                    "attempts": sum(
+                        diagnostics[("rpc_method", method, outcome)] for outcome in HTTP_OUTCOMES
+                    ),
+                }
+                for method in sorted(RPC_METHODS)
+            },
+            "focused_evaluations": {
+                label: diagnostics[("focus_market", label, "count")]
+                for label in ("eligible", "ineligible")
+            },
+            "focused_candles": {
+                frame: {
+                    outcome: diagnostics[("focus_candle", frame, outcome)]
+                    for outcome in sorted(FOCUS_STATUSES)
+                }
+                for frame in ("1m", "5m")
+            },
+            "focus_schedule": {
+                label: diagnostics[("focus_schedule", label, "count")]
+                for label in ("cycles", "selected", "scheduled")
+            },
+        },
         "candidate_candles": {
             **candle_counts,
             "evaluations": candle_total,
@@ -476,5 +709,6 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
             "research and higher-timeframe calls add demand. Passing is necessary, not sufficient; "
             "failing means measured capacity is below even this minimum.",
             "No open-position marks or endpoint requests makes that gate undefined, not passed.",
+            "Diagnostic counters start at deployment, are aggregate only, and do not alter gates.",
         ],
     }
