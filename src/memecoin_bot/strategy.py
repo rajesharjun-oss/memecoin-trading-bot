@@ -618,7 +618,10 @@ def run_paper_decision_cycle(
                 candidate, evaluate_candidate(candidate, settings), settings, journal
             )
         )
-    record_candidate_evaluations([decision.evidence for decision in decisions])
+    record_candidate_evaluations(
+        [decision.evidence for decision in decisions],
+        focus_state_loader=lambda: journal.runtime_state("ohlcv_active_focus"),
+    )
     decisions.sort(key=lambda decision: decision.score, reverse=True)
     opened: dict[str, Any] | None = None
     ranked_decisions: list[StrategyDecision] = []
