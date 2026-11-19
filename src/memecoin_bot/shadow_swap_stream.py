@@ -9,17 +9,23 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import binascii
 import json
 import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from dotenv import load_dotenv
 from solders.pubkey import Pubkey
+
+from .ohlcv import parse_ohlcv
+from .pump_amm_shadow import PoolIdentity, SwapObservation, decode_program_logs, parse_pool_account
 
 
 class ProbeError(RuntimeError):
@@ -90,6 +96,44 @@ def _anchor(client: httpx.Client, rpc_url: str, pool: str) -> str:
     return signatures[0]
 
 
+def _pump_identity(client: httpx.Client, rpc_url: str, pool: str, mint: str) -> PoolIdentity:
+    """Bind an exact on-chain PumpSwap pool and mint before interpreting logs."""
+
+    def result(method: str, params: list[Any]) -> Any:
+        response = client.post(
+            rpc_url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        )
+        if response.status_code != 200 or len(response.content) > 500_000:
+            raise ProbeError("Pool identity RPC request failed")
+        payload = response.json()
+        if not isinstance(payload, dict) or "error" in payload or "result" not in payload:
+            raise ProbeError("Pool identity RPC response was invalid")
+        return payload["result"]
+
+    account = result("getAccountInfo", [pool, {"encoding": "base64"}])
+    value = account.get("value") if isinstance(account, dict) else None
+    encoded = value.get("data") if isinstance(value, dict) else None
+    if (
+        not isinstance(value, dict)
+        or not isinstance(encoded, list)
+        or len(encoded) != 2
+        or encoded[1] != "base64"
+    ):
+        raise ProbeError("Pool account encoding was invalid")
+    try:
+        raw = base64.b64decode(encoded[0], validate=True)
+    except (binascii.Error, ValueError):
+        raise ProbeError("Pool account encoding was invalid") from None
+    supply = result("getTokenSupply", [mint])
+    supply_value = supply.get("value") if isinstance(supply, dict) else None
+    decimals = supply_value.get("decimals") if isinstance(supply_value, dict) else None
+    if type(decimals) is not int:
+        raise ProbeError("Token decimals were unavailable")
+    return parse_pool_account(
+        raw, owner=value.get("owner", ""), pool=pool, target_mint=mint, target_decimals=decimals
+    )
+
+
 def _reference_window(
     client: httpx.Client, rpc_url: str, pool: str, start: str, end: str
 ) -> tuple[set[str], bool, int]:
@@ -131,6 +175,77 @@ def _message_bytes(raw: str | bytes) -> int:
     return len(raw.encode("utf-8")) if isinstance(raw, str) else len(raw)
 
 
+def _record_trade_events(
+    message: dict[str, Any], identity: PoolIdentity, trades: dict[str, tuple[SwapObservation, ...]]
+) -> None:
+    params = message.get("params")
+    result = params.get("result") if isinstance(params, dict) else None
+    value = result.get("value") if isinstance(result, dict) else None
+    if not isinstance(value, dict) or not isinstance(value.get("signature"), str):
+        raise ProbeError("Malformed trade log notification")
+    if value.get("err") is not None:
+        return
+    signature = value["signature"]
+    decoded = decode_program_logs(value.get("logs"), identity)
+    if signature in trades and trades[signature] != decoded:
+        raise ProbeError("Conflicting duplicate trade logs")
+    trades[signature] = decoded
+
+
+def _compare_native_prices(
+    client: httpx.Client,
+    identity: PoolIdentity,
+    reference: set[str],
+    trades: dict[str, tuple[SwapObservation, ...]],
+) -> dict[str, Any]:
+    """Compare event prices with Gecko's quote-token bars; never certify OHLCV."""
+    pool = identity.pool
+    response = client.get(
+        f"https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/minute",
+        params={
+            "aggregate": 1,
+            "limit": 10,
+            "currency": "token",
+            "token": identity.target_mint,
+            "include_empty_intervals": "false",
+        },
+        headers={"Accept": "application/json;version=20230203"},
+    )
+    if response.status_code != 200 or len(response.content) > 1_000_000:
+        raise ProbeError("Native-price reference request failed")
+    now = int(time.time())
+    candles = parse_ohlcv(
+        response.json(), mint=identity.target_mint, pool=pool, timeframe="1m", now=now
+    )
+    bars = {bar.opened_at: bar for bar in candles}
+    matched = outside = without_bar = 0
+    largest_outside_bps = Decimal(0)
+    for signature in reference:
+        for trade in trades.get(signature, ()):
+            if trade.timestamp + 120 > now:
+                continue  # Give the public provider a full minute to finalize.
+            bar = bars.get(trade.timestamp // 60 * 60)
+            if bar is None:
+                without_bar += 1
+                continue
+            matched += 1
+            low, high = Decimal(bar.low), Decimal(bar.high)
+            if not low <= trade.price_sol <= high:
+                outside += 1
+                nearest = low if trade.price_sol < low else high
+                largest_outside_bps = max(
+                    largest_outside_bps, abs(trade.price_sol - nearest) * 10_000 / nearest
+                )
+    return {
+        "status": "provisional_event_price_check" if matched else "insufficient_matched_events",
+        "matched_events": matched,
+        "outside_reference_range": outside,
+        "events_without_reference_bar": without_bar,
+        "largest_outside_bps": round(float(largest_outside_bps), 2),
+        "note": "No volume or OHLC ordering validation; Gecko bars may later revise",
+    }
+
+
 def _compare(pool: str, stream: set[str], reference: set[str], complete: bool) -> PoolResult:
     if not complete:
         return PoolResult(pool, len(stream), None, None, None, None, False)
@@ -147,14 +262,20 @@ def _compare(pool: str, stream: set[str], reference: set[str], complete: bool) -
     )
 
 
-async def probe(rpc_url: str, pools: tuple[str, ...], duration: int) -> dict[str, Any]:
+async def probe(
+    rpc_url: str, pools: tuple[str, ...], duration: int, *, target_mint: str | None = None
+) -> dict[str, Any]:
     """Observe only fixed pool mentions for up to five minutes, with bounded backfill."""
     from websockets.asyncio.client import connect  # Optional research dependency.
 
+    if not 1 <= len(pools) <= 3 or not 10 <= duration <= 300 or (target_mint and len(pools) != 1):
+        raise ProbeError("Invalid bounded research request")
     ws_url = websocket_url(rpc_url)
     with httpx.Client(timeout=10, follow_redirects=False, trust_env=False) as client:
-        http_calls = 0
+        identity = _pump_identity(client, rpc_url, pools[0], target_mint) if target_mint else None
+        http_calls = 2 if identity else 0
         observed: dict[str, set[str]] = defaultdict(set)
+        trade_events: dict[str, tuple[SwapObservation, ...]] = {}
         received_bytes = 0
         started_at = int(time.time())
         async with connect(
@@ -206,6 +327,8 @@ async def probe(rpc_url: str, pools: tuple[str, ...], duration: int) -> dict[str
                 event = _notification(message, subscriptions)
                 if event is not None:
                     observed[event[0]].add(event[1])
+                    if identity is not None:
+                        _record_trade_events(message, identity, trade_events)
 
             # Subscribe first, then anchor the reference. Events arriving while
             # these calls run remain in the socket queue and can be drained.
@@ -225,6 +348,8 @@ async def probe(rpc_url: str, pools: tuple[str, ...], duration: int) -> dict[str
                 event = _notification(json.loads(raw), subscriptions)
                 if event is not None:
                     observed[event[0]].add(event[1])
+                    if identity is not None:
+                        _record_trade_events(json.loads(raw), identity, trade_events)
                 if sum(map(len, observed.values())) > 2000:
                     raise ProbeError("Stream event budget exceeded")
             ends = {pool: await asyncio.to_thread(_anchor, client, rpc_url, pool) for pool in pools}
@@ -242,20 +367,38 @@ async def probe(rpc_url: str, pools: tuple[str, ...], duration: int) -> dict[str
                 event = _notification(json.loads(raw), subscriptions)
                 if event is not None:
                     observed[event[0]].add(event[1])
+                    if identity is not None:
+                        _record_trade_events(json.loads(raw), identity, trade_events)
 
         results = []
+        references: dict[str, set[str]] = {}
         for pool in pools:
             reference, complete, calls = _reference_window(
                 client, rpc_url, pool, starts[pool], ends[pool]
             )
             http_calls += calls
+            references[pool] = reference
             results.append(_compare(pool, observed[pool], reference, complete))
+        native_price_check: dict[str, Any] | None = None
+        gecko_http_calls = 0
+        if identity is not None:
+            if results[0].reference_complete and results[0].missed_events == 0:
+                try:
+                    gecko_http_calls = 1
+                    native_price_check = _compare_native_prices(
+                        client, identity, references[pools[0]], trade_events
+                    )
+                except Exception:
+                    native_price_check = {"status": "reference_unavailable"}
+            else:
+                native_price_check = {"status": "undefined_incomplete_stream"}
         return {
             "started_at_utc_epoch": started_at,
             "duration_seconds": duration,
             "received_bytes": received_bytes,
             "estimated_stream_credits_at_20_per_mb": round(received_bytes * 20 / 1_000_000, 3),
             "http_rpc_calls": http_calls,
+            "gecko_http_calls": gecko_http_calls,
             "results": [
                 {
                     "pool": result.pool,
@@ -268,7 +411,8 @@ async def probe(rpc_url: str, pools: tuple[str, ...], duration: int) -> dict[str
                 }
                 for result in results
             ],
-            "price_comparison": "unsupported: no verified pool-specific swap decoder",
+            "native_price_check": native_price_check,
+            "price_comparison": "event prices only; complete OHLCV remains unverified",
             "status": "research_only",
         }
 
@@ -277,18 +421,31 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Bounded read-only pool log coverage probe")
     parser.add_argument("--pool", action="append", required=True)
     parser.add_argument("--seconds", type=int, default=120)
+    parser.add_argument("--mint", help="Optional PumpSwap token for native-price research")
     args = parser.parse_args()
     pools = tuple(dict.fromkeys(args.pool))
     if not 1 <= len(pools) <= 3 or not 10 <= args.seconds <= 300:
         parser.error("Choose 1-3 pools and 10-300 seconds")
+    if args.mint is not None and len(pools) != 1:
+        parser.error("Native-price research requires one exact pool")
     try:
         for pool in pools:
             Pubkey.from_string(pool)
+        if args.mint is not None:
+            Pubkey.from_string(args.mint)
     except ValueError:
         parser.error("Invalid Solana pool address")
     load_dotenv()
     try:
-        print(json.dumps(asyncio.run(probe(os.getenv("SOLANA_RPC_URL", ""), pools, args.seconds))))
+        print(
+            json.dumps(
+                asyncio.run(
+                    probe(
+                        os.getenv("SOLANA_RPC_URL", ""), pools, args.seconds, target_mint=args.mint
+                    )
+                )
+            )
+        )
     except Exception as exc:
         # Never print exception text: HTTP and WebSocket errors can embed the API key URL.
         print(json.dumps({"status": "failed", "error_type": type(exc).__name__}))
