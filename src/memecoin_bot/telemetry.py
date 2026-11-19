@@ -50,6 +50,15 @@ RPC_METHODS = frozenset(
     )
 )
 FOCUS_STATUSES = frozenset(("ready", "stale", "gap", "collecting", "invalid", "missing"))
+FOCUS_FETCH_ACTIVITY = ("zero_5m", "one_to_seven_5m", "eight_plus_5m", "unknown")
+FOCUS_FETCH_OUTCOMES = (
+    "recent_bar",
+    "late_bar",
+    "empty",
+    "request_error",
+    "rate_limited",
+    "not_attempted",
+)
 DIAGNOSTIC_LABELS = {
     "rpc_method": RPC_METHODS,
     "focus_candle": frozenset(("1m", "5m")),
@@ -97,6 +106,20 @@ CREATE TABLE IF NOT EXISTS telemetry_diagnostics_hourly (
     PRIMARY KEY (hour_start, category, label, outcome)
 )
 """
+_CREATE_FOCUS_FETCH_TABLE = """
+CREATE TABLE IF NOT EXISTS telemetry_focus_fetch_hourly (
+    hour_start INTEGER NOT NULL,
+    activity TEXT NOT NULL CHECK (activity IN (
+        'zero_5m', 'one_to_seven_5m', 'eight_plus_5m', 'unknown'
+    )),
+    outcome TEXT NOT NULL CHECK (outcome IN (
+        'recent_bar', 'late_bar', 'empty', 'request_error', 'rate_limited',
+        'not_attempted'
+    )),
+    count INTEGER NOT NULL CHECK (count >= 0),
+    PRIMARY KEY (hour_start, activity, outcome)
+)
+"""
 
 
 def _hour(epoch_seconds: int) -> int:
@@ -114,6 +137,7 @@ class HourlyTelemetry:
         self.state_path = state_path
         self._pending: Counter[tuple[int, str, str]] = Counter()
         self._pending_diagnostics: Counter[tuple[int, str, str, str]] = Counter()
+        self._pending_focus_fetch: Counter[tuple[int, str, str]] = Counter()
         self._lock = threading.Lock()
         self._flush_lock = threading.Lock()
         self._stop = threading.Event()
@@ -151,6 +175,13 @@ class HourlyTelemetry:
         with self._lock:
             self._pending_diagnostics[(hour, category, label, outcome)] += count
 
+    def add_focus_fetch(self, activity: str, outcome: str, *, at: int | None = None) -> None:
+        if activity not in FOCUS_FETCH_ACTIVITY or outcome not in FOCUS_FETCH_OUTCOMES:
+            raise ValueError("Invalid focus fetch counter")
+        hour = _hour(int(time.time()) if at is None else at)
+        with self._lock:
+            self._pending_focus_fetch[(hour, activity, outcome)] += 1
+
     def market_cycle(self, ready: int, achieved: int, interval_seconds: int) -> None:
         if min(ready, achieved, interval_seconds) < 0 or interval_seconds == 0:
             raise ValueError("Invalid market-cycle telemetry")
@@ -185,11 +216,16 @@ class HourlyTelemetry:
                     if diagnostic_key[0] < cutoff:
                         del self._pending_diagnostics[diagnostic_key]
                 diagnostics_batch = dict(self._pending_diagnostics)
+                for focus_key in list(self._pending_focus_fetch):
+                    if focus_key[0] < cutoff:
+                        del self._pending_focus_fetch[focus_key]
+                focus_batch = dict(self._pending_focus_fetch)
             connection = sqlite3.connect(self.state_path, timeout=0.2)
             try:
                 with connection:
                     connection.execute(_CREATE_TABLE)
                     connection.execute(_CREATE_DIAGNOSTICS_TABLE)
+                    connection.execute(_CREATE_FOCUS_FETCH_TABLE)
                     if batch:
                         connection.executemany(
                             "INSERT INTO telemetry_hourly (hour_start, metric, outcome, count) "
@@ -223,6 +259,20 @@ class HourlyTelemetry:
                     connection.execute(
                         "DELETE FROM telemetry_diagnostics_hourly WHERE hour_start < ?", (cutoff,)
                     )
+                    if focus_batch:
+                        connection.executemany(
+                            "INSERT INTO telemetry_focus_fetch_hourly "
+                            "(hour_start, activity, outcome, count) VALUES (?, ?, ?, ?) "
+                            "ON CONFLICT(hour_start, activity, outcome) "
+                            "DO UPDATE SET count = count + excluded.count",
+                            (
+                                (hour, activity, outcome, count)
+                                for (hour, activity, outcome), count in focus_batch.items()
+                            ),
+                        )
+                    connection.execute(
+                        "DELETE FROM telemetry_focus_fetch_hourly WHERE hour_start < ?", (cutoff,)
+                    )
             finally:
                 connection.close()
             with self._lock:
@@ -234,6 +284,10 @@ class HourlyTelemetry:
                     self._pending_diagnostics[diagnostic_key] -= count
                     if self._pending_diagnostics[diagnostic_key] <= 0:
                         del self._pending_diagnostics[diagnostic_key]
+                for focus_key, count in focus_batch.items():
+                    self._pending_focus_fetch[focus_key] -= count
+                    if self._pending_focus_fetch[focus_key] <= 0:
+                        del self._pending_focus_fetch[focus_key]
         except Exception as exc:
             LOGGER.warning("Telemetry flush failed (%s)", type(exc).__name__)
         finally:
@@ -277,6 +331,25 @@ def _safe_add_diagnostic(category: str, label: str, outcome: str, count: int = 1
             _recorder.add_diagnostic(category, label, outcome, count)
     except Exception as exc:
         LOGGER.warning("Diagnostic counter failed (%s)", type(exc).__name__)
+
+
+def record_focus_fetch(transactions_5m: int | None, outcome: str) -> None:
+    """Record only a fixed activity bucket and outcome, never a mint or pool."""
+    try:
+        if _recorder is None:
+            return
+        activity = (
+            "unknown"
+            if type(transactions_5m) is not int or transactions_5m < 0
+            else "zero_5m"
+            if transactions_5m == 0
+            else "one_to_seven_5m"
+            if transactions_5m < 8
+            else "eight_plus_5m"
+        )
+        _recorder.add_focus_fetch(activity, outcome)
+    except Exception as exc:
+        LOGGER.warning("Focus fetch telemetry failed (%s)", type(exc).__name__)
 
 
 def _rpc_method(request: httpx.Request) -> str:
@@ -485,8 +558,10 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
     start = end - hours * 3_600
     counts: Counter[tuple[str, str]] = Counter()
     diagnostics: Counter[tuple[str, str, str]] = Counter()
+    focus_fetch: Counter[tuple[str, str]] = Counter()
     diagnostic_hours: set[int] = set()
     diagnostics_available = False
+    focus_fetch_available = False
     legacy_ignored: Counter[str] = Counter()
     hourly_counts: dict[int, Counter[tuple[str, str]]] = {}
     hours_seen: set[int] = set()
@@ -509,9 +584,27 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
                 diagnostics_available = True
             except sqlite3.OperationalError:
                 diagnostic_rows = []  # Existing journals predate this additive table.
+            try:
+                focus_rows = connection.execute(
+                    "SELECT activity, outcome, count FROM telemetry_focus_fetch_hourly "
+                    "WHERE hour_start >= ? AND hour_start < ?",
+                    (start, end),
+                ).fetchall()
+                focus_fetch_available = True
+            except sqlite3.OperationalError:
+                focus_rows = []  # Existing journals predate this additive table.
     except (OSError, sqlite3.Error):
         rows = []
         diagnostic_rows = []
+        focus_rows = []
+    for activity, outcome, count in focus_rows:
+        if (
+            activity in FOCUS_FETCH_ACTIVITY
+            and outcome in FOCUS_FETCH_OUTCOMES
+            and type(count) is int
+            and count >= 0
+        ):
+            focus_fetch[(activity, outcome)] += count
     for hour, category, label, outcome, count in diagnostic_rows:
         if (
             label in DIAGNOSTIC_LABELS.get(category, ())
@@ -615,6 +708,13 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
         "diagnostics": {
             "available": diagnostics_available,
             "observed_hours": len(diagnostic_hours),
+            "focus_fetch_available": focus_fetch_available,
+            "focus_fetch": {
+                activity: {
+                    outcome: focus_fetch[(activity, outcome)] for outcome in FOCUS_FETCH_OUTCOMES
+                }
+                for activity in FOCUS_FETCH_ACTIVITY
+            },
             "rpc_methods": {
                 method: {
                     **{
@@ -710,5 +810,8 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
             "failing means measured capacity is below even this minimum.",
             "No open-position marks or endpoint requests makes that gate undefined, not passed.",
             "Diagnostic counters start at deployment, are aggregate only, and do not alter gates.",
+            "Focus fetch activity is a contemporaneous DEX 5m transaction count; it cannot "
+            "prove that a trade occurred in each missing 1m slot. Recent/late compares the "
+            "latest returned 1m bar with the existing 180-second entry freshness boundary.",
         ],
     }
