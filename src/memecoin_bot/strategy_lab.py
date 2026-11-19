@@ -28,6 +28,7 @@ from .ohlcv import (
     OhlcvRateLimited,
     PoolMarketObservation,
 )
+from .telemetry import record_focus_fetch
 
 Timeframe = Literal["1m", "5m", "15m", "1h"]
 FactorName = Literal["trend", "momentum", "volume", "liquidity"]
@@ -896,6 +897,18 @@ def collect_market_snapshots(
     direct_5m_repair_attempted = False
     direct_5m_repair_request_succeeded = False
     direct_5m_repair_bars_returned = 0
+    focus_scheduled = {
+        mint for mint, frames in selected if mint in strategy_focus and "1m" in frames
+    }
+    focus_attempted: set[str] = set()
+    focus_transactions = {
+        mint: (
+            market.txns_5m_buys + market.txns_5m_sells
+            if (market := markets.get(mint)) is not None
+            else None
+        )
+        for mint in focus_scheduled
+    }
     if not rate_limited:
         request_interval = (
             TRIAL_REQUEST_INTERVAL_SECONDS
@@ -910,6 +923,9 @@ def collect_market_snapshots(
                     continue
                 for timeframe in frames:
                     try:
+                        focused_1m = mint in focus_scheduled and timeframe == "1m"
+                        if focused_1m:
+                            focus_attempted.add(mint)
                         ohlcv_attempted += 1
                         if mint == direct_5m_repair and timeframe == "5m":
                             direct_5m_repair_attempted = True
@@ -918,6 +934,15 @@ def collect_market_snapshots(
                         if mint in remaining_cohort_set:
                             research_secondary_attempted += 1
                         candles = ohlcv.candles(mint, pool, timeframe)
+                        if focused_1m:
+                            record_focus_fetch(
+                                focus_transactions[mint],
+                                "empty"
+                                if not candles
+                                else "recent_bar"
+                                if 0 <= int(time.time()) - max(c.opened_at for c in candles) <= 180
+                                else "late_bar",
+                            )
                         ohlcv_succeeded += 1
                         if mint == direct_5m_repair and timeframe == "5m":
                             direct_5m_repair_request_succeeded = True
@@ -951,6 +976,8 @@ def collect_market_snapshots(
                             empty_responses += 1
                             retry_until[f"{mint}:{pool}:{timeframe}"] = int(time.time()) + 300
                     except OhlcvRateLimited as exc:
+                        if focused_1m:
+                            record_focus_fetch(focus_transactions[mint], "rate_limited")
                         error_codes[_ohlcv_error_code(exc)] += 1
                         errors.append(f"{mint[:6]} {timeframe}: {exc}")
                         backoff_until = int(time.time()) + exc.retry_after_seconds
@@ -958,6 +985,8 @@ def collect_market_snapshots(
                         rate_limited = True
                         break
                     except OhlcvError as exc:
+                        if focused_1m:
+                            record_focus_fetch(focus_transactions[mint], "request_error")
                         code = _ohlcv_error_code(exc)
                         error_codes[code] += 1
                         retry_seconds = (
@@ -971,6 +1000,8 @@ def collect_market_snapshots(
         # so the next successful cycle does not silently skip research data.
         if not rate_limited:
             journal.set_runtime_state("ohlcv_schedule", {"cycle": cycle + 1})
+    for mint in focus_scheduled - focus_attempted:
+        record_focus_fetch(focus_transactions[mint], "not_attempted")
     # Some sampled pools have authentic trade candles but DEX Screener omits
     # liquidity. Capture the exact pool's reserve prospectively, without
     # changing the paper entry market gate or inventing historical liquidity.
