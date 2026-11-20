@@ -198,7 +198,7 @@ def _trace_origin(
                     {
                         "commitment": "confirmed",
                         "encoding": "jsonParsed",
-                        "maxSupportedTransactionVersion": 0,
+                        "maxSupportedTransactionVersion": 1,
                     },
                 ],
                 attempts=1,
