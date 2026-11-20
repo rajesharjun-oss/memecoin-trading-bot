@@ -150,6 +150,33 @@ def test_forensics_excludes_only_exact_vault_and_groups_controllers() -> None:
     assert report.origin.current_observed_bps == 1_500
 
 
+def test_forensics_traces_mint_origin_from_version_one_transaction() -> None:
+    class VersionOneRpc(ForensicRpc):
+        def call(self, method: str, params: list[Any], *, attempts: int = 3) -> Any:
+            if method == "getTransaction":
+                if params[1].get("maxSupportedTransactionVersion") != 1:
+                    raise RpcError("Transaction version (1) is not supported by the client")
+                transaction = super().call(method, params, attempts=attempts)
+                return {**transaction, "version": 1}
+            return super().call(method, params, attempts=attempts)
+
+    rpc = VersionOneRpc()
+    report = analyze_token_forensics(
+        cast(RpcClient, rpc),
+        mint=rpc.mint,
+        token_program=TOKEN_PROGRAM_ID,
+        supply=10_000,
+        largest_accounts=rpc.largest,
+        origin_trace_enabled=True,
+        signature_limit=100,
+        transaction_candidates=5,
+    )
+
+    assert report.origin is not None
+    assert report.origin.creation_signer == rpc.wallet
+    assert report.origin.signature == "creation"
+
+
 def test_audit_uses_adjusted_concentration_only_with_exact_vault_evidence() -> None:
     rpc = ForensicRpc()
     result = audit_token(
