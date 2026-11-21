@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from dotenv import load_dotenv
 from solders.pubkey import Pubkey
 
+from .candle_intake import MAX_CANDLE_INTAKE
 from .constants import DEFAULT_DISCOVERY_PROGRAM_IDS
 
 
@@ -118,6 +119,7 @@ class Settings:
     paper_liquidity_breaker_usd: int = 15_000
     strategy_lab_collection_enabled: bool = True
     strategy_lab_collection_interval_seconds: int = 30
+    paper_candle_candidate_limit: int = 0
     narrative_intelligence_enabled: bool = False
     narrative_gdelt_enabled: bool = True
     narrative_google_news_enabled: bool = True
@@ -291,6 +293,9 @@ class Settings:
             strategy_lab_collection_enabled=_boolean("STRATEGY_LAB_COLLECTION_ENABLED", True),
             strategy_lab_collection_interval_seconds=_integer(
                 "STRATEGY_LAB_COLLECTION_INTERVAL_SECONDS", 30, minimum=30, maximum=3_600
+            ),
+            paper_candle_candidate_limit=_integer(
+                "PAPER_CANDLE_CANDIDATE_LIMIT", 0, minimum=0, maximum=MAX_CANDLE_INTAKE
             ),
             narrative_intelligence_enabled=_boolean("NARRATIVE_INTELLIGENCE_ENABLED", True),
             narrative_gdelt_enabled=_boolean("NARRATIVE_GDELT_ENABLED", True),

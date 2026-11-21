@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
+from .candle_intake import CANDLE_INTAKE_STATE
 from .config import Settings
 from .constants import MARKET_POLICY_VERSION, MAX_ABSOLUTE_24H_CHANGE_PCT
 from .execution import (
@@ -621,6 +622,11 @@ def run_paper_decision_cycle(
     record_candidate_evaluations(
         [decision.evidence for decision in decisions],
         focus_state_loader=lambda: journal.runtime_state("ohlcv_active_focus"),
+        intake_state_loader=(
+            (lambda: journal.runtime_state(CANDLE_INTAKE_STATE))
+            if settings.paper_candle_candidate_limit and not settings.live_trading_enabled
+            else None
+        ),
     )
     decisions.sort(key=lambda decision: decision.score, reverse=True)
     opened: dict[str, Any] | None = None

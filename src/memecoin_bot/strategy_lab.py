@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import httpx
 
+from .candle_intake import CANDLE_INTAKE_STATE, choose_candle_intake
 from .constants import MAX_ABSOLUTE_24H_CHANGE_PCT
 from .exit_policy import ExitPolicy, evaluate_exit_rule
 from .hot_radar import evaluate_hot_market
@@ -204,6 +205,7 @@ def collect_market_snapshots(
     *,
     limit: int = 20,
     active_candidate_priority: Callable[[dict[str, object]], bool] | None = None,
+    candidate_intake_limit: int = 0,
 ) -> dict[str, object]:
     collection_started_at = int(time.time())
     open_mints = [
@@ -236,6 +238,20 @@ def collect_market_snapshots(
         )
     )[:60]
     if not mints:
+        if candidate_intake_limit:
+            now = int(time.time())
+            journal.set_runtime_state(
+                CANDLE_INTAKE_STATE, {"mints": [], "selected_at": now, "updated_at": now}
+            )
+            return {
+                "collected": 0,
+                "tracked": 0,
+                "market_ready_mints": 0,
+                "ohlcv_requests_succeeded": 0,
+                "ohlcv_cache_hits": 0,
+                "intake_admitted": 0,
+                "intake_network_1m_successes": 0,
+            }
         return {"collected": 0, "tracked": 0}
     errors: list[str] = []
     error_codes: Counter[str] = Counter()
@@ -273,6 +289,7 @@ def collect_market_snapshots(
     ohlcv_attempted = 0
     ohlcv_succeeded = 0
     ohlcv_cache_hits = 0
+    intake_network_1m_successes = 0
     refreshed_mints: set[str] = set()
     research_secondary_attempted = 0
     research_secondary_succeeded = 0
@@ -295,10 +312,30 @@ def collect_market_snapshots(
             if candidate is not None and active_candidate_priority(candidate):
                 ready_mints.append(str(candidate["mint"]))
     followup_mints = select_decision_followup(journal, ready_mints)
-    # Keep every market-ready mint eligible for oldest-fetch scheduling. The
-    # former fixed four-item slice repeatedly selected the same candidates
-    # and left later eligible mints without a current 1m candle.
-    active_mints = list(dict.fromkeys([*ready_mints, *safe_watchlist]))[: max(4, len(ready_mints))]
+    market_ready_count = len(ready_mints)
+    intake_mints: frozenset[str] | None = None
+    if candidate_intake_limit:
+        intake = choose_candle_intake(
+            {
+                mint: markets[mint].txns_5m_buys + markets[mint].txns_5m_sells
+                if mint in markets
+                else 0
+                for mint in ready_mints
+            },
+            previous=journal.runtime_state(CANDLE_INTAKE_STATE) or {},
+            preferred=followup_mints,
+            limit=candidate_intake_limit,
+            now=int(time.time()),
+        )
+        journal.set_runtime_state(CANDLE_INTAKE_STATE, intake.state())
+        ready_mints = list(intake.mints)
+        active_mints = ready_mints
+        intake_mints = frozenset(intake.mints)
+    else:
+        # Baseline: keep the full market-ready set eligible for oldest-fetch scheduling.
+        active_mints = list(dict.fromkeys([*ready_mints, *safe_watchlist]))[
+            : max(4, len(ready_mints))
+        ]
     budget_state = journal.runtime_state("ohlcv_request_budget") or {}
     raw_budget = budget_state.get("limit")
     max_request_budget = max(4, min(6, int(60 // TRIAL_REQUEST_INTERVAL_SECONDS)))
@@ -949,6 +986,10 @@ def collect_market_snapshots(
                             direct_5m_repair_bars_returned = len(candles)
                         if getattr(ohlcv, "last_call_cache_hit", False):
                             ohlcv_cache_hits += 1
+                        elif (
+                            intake_mints is not None and mint in intake_mints and timeframe == "1m"
+                        ):
+                            intake_network_1m_successes += 1
                         if mint in followup_mints and timeframe == "1m":
                             followup_succeeded += 1
                         if mint in remaining_cohort_set:
@@ -1139,7 +1180,7 @@ def collect_market_snapshots(
             "succeeded": ohlcv_succeeded,
             "cache_hits": ohlcv_cache_hits,
             "rate_limited": rate_limited,
-            "market_ready": len(ready_mints),
+            "market_ready": market_ready_count,
             "research_focus": len(research_focus),
         }
     )
@@ -1209,7 +1250,9 @@ def collect_market_snapshots(
         "priority_safe_tracked": len(set(priority_safe) & set(mints)),
         "active_watchlist_size": len(active_mints),
         "active_market_ready_size": len(set(active_mints) & set(ready_mints)),
-        "market_ready_mints": len(ready_mints),
+        "market_ready_mints": market_ready_count,
+        "intake_admitted": len(intake_mints) if intake_mints is not None else None,
+        "intake_network_1m_successes": intake_network_1m_successes,
         "collection_lane": lane,
         "direct_5m_repair_scheduled": direct_5m_repair is not None,
         "direct_5m_repair_attempted": direct_5m_repair_attempted,
