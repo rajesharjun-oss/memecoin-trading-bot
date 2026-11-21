@@ -26,7 +26,9 @@ dev = [
   "pytest==9.1.1",
   "ruff==0.16.8",
   "types-defusedxml==0.7.0.20260504",
+  "websockets==17.4",
 ]
+research = ["websockets==17.4"]
 
 [project.scripts]
 memecoin-bot = "memecoin_bot.cli:main"
