@@ -471,6 +471,7 @@ class PaperAutomationWorker:
         self._state_lock = threading.Lock()
         self._cycle_lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._first_cycle_finished = threading.Event()
         self._thread: threading.Thread | None = None
         self._state = "stopped"
         self._last_started_at: str | None = None
@@ -533,16 +534,23 @@ class PaperAutomationWorker:
                 LOGGER.warning("Automation state write failed (%s)", type(exc).__name__)
                 return
 
-    def start(self) -> dict[str, object]:
+    def start(
+        self,
+        *,
+        after_first_cycles: tuple[PaperAutomationWorker, ...] = (),
+        startup_wait_seconds: float = 90,
+    ) -> dict[str, object]:
         with self._state_lock:
             if self._thread and self._thread.is_alive():
                 return self.status_unlocked()
             self._stop_event.clear()
+            self._first_cycle_finished.clear()
             self._run_id = str(uuid.uuid4())
-            self._state = "running"
+            self._state = "starting" if after_first_cycles else "running"
             self._last_error = None
             self._thread = threading.Thread(
                 target=self._loop,
+                args=(after_first_cycles, startup_wait_seconds) if after_first_cycles else (),
                 name="paper-automation",
                 daemon=True,
             )
@@ -747,8 +755,26 @@ class PaperAutomationWorker:
             }
         return summary
 
-    def _loop(self) -> None:
+    def _loop(
+        self,
+        after_first_cycles: tuple[PaperAutomationWorker, ...] = (),
+        startup_wait_seconds: float = 90,
+    ) -> None:
         try:
+            if after_first_cycles:
+                deadline = time.monotonic() + startup_wait_seconds
+                while not all(
+                    worker._first_cycle_finished.is_set() for worker in after_first_cycles
+                ):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    if self._stop_event.wait(min(0.1, remaining)):
+                        return
+                with self._state_lock:
+                    if self._stop_event.is_set():
+                        return
+                    self._state = "running"
             while not self._stop_event.is_set():
                 cycle_started = time.monotonic()
                 try:
@@ -767,6 +793,7 @@ class PaperAutomationWorker:
                 with self._state_lock:
                     self._next_cycle_at = datetime.fromtimestamp(next_epoch, UTC).isoformat()
                 self._persist()
+                self._first_cycle_finished.set()
                 if self._stop_event.wait(delay):
                     break
         finally:
@@ -775,3 +802,4 @@ class PaperAutomationWorker:
                     self._state = "stopped"
                 self._next_cycle_at = None
             self._persist()
+            self._first_cycle_finished.set()

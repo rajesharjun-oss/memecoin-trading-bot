@@ -131,6 +131,63 @@ def test_dashboard_and_exit_monitor_start_while_backup_is_running(tmp_path: Path
     assert finished.is_set()
 
 
+@pytest.mark.parametrize("writer", ["exit_monitor", "market_collector"])
+def test_startup_waits_to_run_automation_until_the_first_writer_releases_journal(
+    tmp_path: Path,
+    writer: str,
+) -> None:
+    settings = replace(
+        _settings(tmp_path),
+        paper_automation_autostart=True,
+        operations_backup_enabled=False,
+        strategy_lab_collection_enabled=writer == "market_collector",
+        narrative_intelligence_enabled=False,
+    )
+    app = create_dashboard_app(settings, "test-pairing-code")
+    journal_held = threading.Event()
+    release_writer = threading.Event()
+    automation_attempted = threading.Event()
+    automation_saved = threading.Event()
+
+    def first_writer_cycle() -> dict[str, object]:
+        with TradeJournal(settings.state_path) as journal:
+            journal._connection.execute("BEGIN IMMEDIATE")
+            try:
+                journal_held.set()
+                assert release_writer.wait(5)
+            finally:
+                journal._connection.rollback()
+        return {"paused": False, "exits": []}
+
+    def automation_cycle() -> dict[str, object]:
+        assert journal_held.wait(3)
+        automation_attempted.set()
+        with TradeJournal(settings.state_path) as journal:
+            journal._connection.execute("PRAGMA busy_timeout=0")
+            journal.set_runtime_state("test_startup_write", {"completed": True})
+        automation_saved.set()
+        return {"paused": False, "exits": []}
+
+    if writer == "exit_monitor":
+        app.state.paper_exit_monitor._cycle = first_writer_cycle
+    else:
+        app.state.paper_exit_monitor._cycle = lambda: {"paused": False, "exits": []}
+        app.state.market_collector._cycle = first_writer_cycle
+    app.state.paper_automation._cycle = automation_cycle
+    app.state.paper_automation._state_saver = None
+    app.state.paper_watchdog._cycle = lambda: {"paused": False}
+    app.state.paper_watchdog._state_saver = None
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        try:
+            assert journal_held.wait(3)
+            assert client.get("/").status_code == 200
+            assert app.state.paper_automation.status()["state"] == "starting"
+            assert not automation_attempted.is_set()
+        finally:
+            release_writer.set()
+        assert automation_saved.wait(3)
+
+
 def test_startup_quarantines_unmonitored_open_paper_position(tmp_path: Path) -> None:
     settings = replace(_settings(tmp_path), paper_automation_autostart=True)
     old = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
