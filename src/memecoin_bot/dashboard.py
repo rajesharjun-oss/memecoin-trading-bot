@@ -678,10 +678,6 @@ def create_dashboard_app(settings: Settings, pairing_code: str) -> FastAPI:
                 )
                 if interruption:
                     LOGGER.warning("Paper campaign interrupted before worker startup")
-                try:
-                    backup_manager.run_if_due()
-                except Exception:
-                    LOGGER.exception("State backup failed during startup")
                 if (
                     not interruption
                     and settings.paper_automation_autostart
@@ -703,7 +699,8 @@ def create_dashboard_app(settings: Settings, pairing_code: str) -> FastAPI:
                     market_collector.start()
                 if settings.narrative_intelligence_enabled:
                     narrative_collector.start()
-                yield
+                with backup_manager.background_check():
+                    yield
             finally:
                 paper_watchdog.shutdown()
                 automation.shutdown()

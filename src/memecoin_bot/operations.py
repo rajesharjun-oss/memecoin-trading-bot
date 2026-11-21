@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from .journal import TradeJournal
+
+LOGGER = logging.getLogger(__name__)
 
 
 class OperationsError(RuntimeError):
@@ -241,8 +247,36 @@ class StateBackupManager:
         self._last_error: str | None = None
 
     def _persisted(self) -> dict[str, object]:
-        with TradeJournal(self.state_path) as journal:
+        with TradeJournal(self.state_path, readonly=True) as journal:
             return journal.runtime_state("state_backup") or {}
+
+    @contextmanager
+    def background_check(self) -> Iterator[None]:
+        """Check whether a backup is due without holding up dashboard startup."""
+        if not self.enabled:
+            yield
+            return
+        stopping = threading.Event()
+
+        def run() -> None:
+            try:
+                self.run_if_due(stopping=stopping)
+            except Exception as exc:
+                if not stopping.is_set():
+                    LOGGER.warning("Automatic state backup failed (%s)", type(exc).__name__)
+
+        thread = threading.Thread(target=run, name="state-backup", daemon=True)
+        try:
+            thread.start()
+        except RuntimeError as exc:
+            self._last_error = f"Could not start automatic state backup ({type(exc).__name__})"
+            LOGGER.warning("%s", self._last_error)
+        try:
+            yield
+        finally:
+            stopping.set()
+            if thread.ident is not None:
+                thread.join(timeout=2)
 
     def status(self) -> dict[str, object]:
         persisted = self._persisted()
@@ -256,12 +290,19 @@ class StateBackupManager:
             "last_error": self._last_error,
         }
 
-    def run_if_due(self, *, force: bool = False) -> dict[str, object]:
+    def run_if_due(
+        self, *, force: bool = False, stopping: threading.Event | None = None
+    ) -> dict[str, object]:
+        def check_stopping() -> None:
+            if stopping is not None and stopping.is_set():
+                raise OperationsError("State backup cancelled during shutdown")
+
         if not self.enabled and not force:
             return {**self.status(), "created": False, "reason": "disabled"}
         if not self._lock.acquire(blocking=False):
             raise OperationsError("A state backup is already running")
         try:
+            check_stopping()
             persisted = self._persisted()
             last_raw = persisted.get("last_backup_at")
             if not force and isinstance(last_raw, str):
@@ -275,17 +316,25 @@ class StateBackupManager:
                     return {**self.status(), "created": False, "reason": "not_due"}
 
             self.backup_directory.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
             destination = (self.backup_directory / f"trade-state-{stamp}.sqlite3").resolve()
             if destination == self.state_path:
                 raise OperationsError("Backup destination must differ from the live state database")
-            with TradeJournal(self.state_path) as journal:
-                journal.backup_to(destination)
-            digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+            with TemporaryDirectory(prefix=".backup-", dir=self.backup_directory) as staging:
+                pending = Path(staging) / "state.sqlite3"
+                with TradeJournal(self.state_path, readonly=True) as journal:
+                    journal.backup_to(pending, checkpoint=check_stopping)
+                digest = hashlib.sha256()
+                with pending.open("rb") as backup:
+                    while chunk := backup.read(1024 * 1024):
+                        check_stopping()
+                        digest.update(chunk)
+                check_stopping()
+                pending.replace(destination)
             payload: dict[str, object] = {
                 "last_backup_at": datetime.now(UTC).isoformat(),
                 "last_backup_path": str(destination),
-                "last_backup_sha256": digest,
+                "last_backup_sha256": digest.hexdigest(),
                 "last_backup_bytes": destination.stat().st_size,
             }
             with TradeJournal(self.state_path) as journal:
@@ -293,7 +342,8 @@ class StateBackupManager:
             self._last_error = None
             return {**payload, "created": True}
         except Exception as exc:
-            self._last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            if stopping is None or not stopping.is_set():
+                self._last_error = f"State backup failed ({type(exc).__name__})"
             raise
         finally:
             self._lock.release()

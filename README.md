@@ -1088,8 +1088,9 @@ All caps are enforced server-side in the Python process, not only by CLI validat
 - `PAPER_EXECUTION_MAX_QUOTE_AGE_MS`: rejects a route that has aged beyond this limit before use.
 - `PAPER_EXECUTION_MAX_TRADE_LIQUIDITY_BPS`: maximum notional share of visible pool liquidity;
   `100` is 1%.
-- `OPERATIONS_BACKUP_ENABLED`: create a verified SQLite online backup when the dashboard starts and
-  the configured interval is due.
+- `OPERATIONS_BACKUP_ENABLED`: check for a due SQLite online backup in the background after
+  starting the dashboard workers. Only completed, verified backups appear as
+  `trade-state-*.sqlite3` in the backup directory.
 - `OPERATIONS_BACKUP_INTERVAL_SECONDS`: minimum time between automatic state backups.
 - `OPERATIONS_BACKUP_DIRECTORY`: local backup destination; keep it on encrypted durable storage in
   production. Backups contain strategy and portfolio state, never the wallet key.

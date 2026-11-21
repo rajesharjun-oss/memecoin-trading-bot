@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -95,6 +96,39 @@ def test_startup_failure_stops_workers_before_releasing_journal_lock(tmp_path: P
         pass
     assert app.state.paper_automation.status()["running"] is False
     assert app.state.paper_exit_monitor.status()["running"] is False
+
+
+def test_dashboard_and_exit_monitor_start_while_backup_is_running(tmp_path: Path) -> None:
+    app = create_dashboard_app(
+        replace(_settings(tmp_path), paper_automation_autostart=True),
+        "test-pairing-code",
+    )
+    app.state.paper_automation._cycle = lambda: {"paused": False, "exits": []}
+    app.state.paper_exit_monitor._cycle = lambda: {"paused": False, "exits": []}
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def slow_backup(
+        *, force: bool = False, stopping: threading.Event | None = None
+    ) -> dict[str, object]:
+        del force, stopping
+        started.set()
+        release.wait(5)
+        finished.set()
+        return {"created": True}
+
+    app.state.backup_manager.run_if_due = slow_backup
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        try:
+            assert started.wait(3)
+            assert not finished.is_set()
+            assert client.get("/").status_code == 200
+            assert app.state.paper_exit_monitor.status()["running"] is True
+            assert not finished.is_set()
+        finally:
+            release.set()
+    assert finished.is_set()
 
 
 def test_startup_quarantines_unmonitored_open_paper_position(tmp_path: Path) -> None:
