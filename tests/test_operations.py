@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from memecoin_bot.journal import TradeJournal
-from memecoin_bot.operations import StateBackupManager, operational_health
+from memecoin_bot.operations import OperationsError, StateBackupManager, operational_health
 
 
 def test_backup_manager_creates_verified_online_backup(tmp_path: Path) -> None:
@@ -29,6 +31,54 @@ def test_backup_manager_creates_verified_online_backup(tmp_path: Path) -> None:
     with TradeJournal(backup_path) as backup:
         assert backup.quick_check() is True
         assert backup.runtime_state("test")["value"] == 7  # type: ignore[index]
+
+
+def test_backup_copies_a_consistent_snapshot_during_worker_writes(tmp_path: Path) -> None:
+    state = tmp_path / "state.sqlite3"
+    destination = tmp_path / "snapshot.sqlite3"
+    wrote = False
+    with TradeJournal(state) as worker, TradeJournal(state, readonly=True) as source:
+        worker.set_runtime_state("backup_test", {"value": 1})
+
+        def checkpoint() -> None:
+            nonlocal wrote
+            if not wrote:
+                worker.set_runtime_state("backup_test", {"value": 2})
+                wrote = True
+
+        source.backup_to(destination, checkpoint=checkpoint)
+        assert (worker.runtime_state("backup_test") or {}).get("value") == 2
+    with TradeJournal(destination, readonly=True) as backup:
+        assert (backup.runtime_state("backup_test") or {}).get("value") == 1
+
+
+def test_cancelled_backup_cleans_up_without_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state.sqlite3"
+    with TradeJournal(state):
+        pass
+    manager = StateBackupManager(
+        state_path=state,
+        backup_directory=tmp_path / "backups",
+        interval_seconds=300,
+        enabled=True,
+    )
+    stopping = threading.Event()
+
+    def interrupt_copy(
+        _: TradeJournal, destination: Path, *, checkpoint: Callable[[], None]
+    ) -> None:
+        destination.write_bytes(b"synthetic incomplete copy")
+        stopping.set()
+        checkpoint()
+
+    monkeypatch.setattr(TradeJournal, "backup_to", interrupt_copy)
+    with pytest.raises(OperationsError, match="cancelled during shutdown"):
+        manager.run_if_due(stopping=stopping)
+    assert list(manager.backup_directory.iterdir()) == []
+    assert manager.status()["last_backup_at"] is None
+    assert manager.status()["last_error"] is None
 
 
 def test_operational_health_reports_degraded_worker(tmp_path: Path) -> None:

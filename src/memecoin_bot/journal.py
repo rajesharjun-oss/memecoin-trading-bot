@@ -2838,14 +2838,38 @@ class TradeJournal:
         row = self._connection.execute("PRAGMA quick_check").fetchone()
         return bool(row and str(row[0]).lower() == "ok")
 
-    def backup_to(self, destination: Path) -> None:
+    def backup_to(self, destination: Path, *, checkpoint: Callable[[], None] | None = None) -> None:
         resolved = destination.resolve()
         if resolved == self.path.resolve():
             raise JournalError("Backup destination must differ from the live database")
         resolved.parent.mkdir(parents=True, exist_ok=True)
         destination_connection = sqlite3.connect(resolved)
+
+        def check_copy_progress(_: int, __: int, ___: int) -> None:
+            check_progress()
+
+        def check_progress() -> int:
+            if checkpoint is not None:
+                checkpoint()
+            return 0
+
         try:
-            self._connection.backup(destination_connection)
+            # Pin one WAL snapshot so concurrent worker writes do not restart this copy.
+            opened_snapshot = not self._connection.in_transaction
+            if opened_snapshot:
+                self._connection.execute("BEGIN")
+            try:
+                self._connection.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+                check_progress()
+                self._connection.backup(
+                    destination_connection, pages=256, progress=check_copy_progress
+                )
+            finally:
+                if opened_snapshot:
+                    self._connection.rollback()
+
+            check_progress()
+            destination_connection.set_progress_handler(check_progress, 4_096)
             check = destination_connection.execute("PRAGMA quick_check").fetchone()
             if not check or str(check[0]).lower() != "ok":
                 raise JournalError("Backup database integrity check failed")
