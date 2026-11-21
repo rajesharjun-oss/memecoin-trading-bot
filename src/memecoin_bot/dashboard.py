@@ -678,13 +678,13 @@ def create_dashboard_app(settings: Settings, pairing_code: str) -> FastAPI:
                 )
                 if interruption:
                     LOGGER.warning("Paper campaign interrupted before worker startup")
-                if (
+                start_paper = (
                     not interruption
                     and settings.paper_automation_autostart
                     and automation.status()["state"] != "paused"
-                ):
+                )
+                if start_paper:
                     exit_monitor.start()
-                    automation.start()
                 if not interruption:
                     with TradeJournal(settings.state_path, readonly=True) as journal:
                         campaign = journal.runtime_state("paper_campaign") or {}
@@ -699,6 +699,15 @@ def create_dashboard_app(settings: Settings, pairing_code: str) -> FastAPI:
                     market_collector.start()
                 if settings.narrative_intelligence_enabled:
                     narrative_collector.start()
+                if start_paper:
+                    # Give the exit monitor and market collector the first journal writes.
+                    # The bounded wait is only for startup; entry gates still apply.
+                    prerequisites = (
+                        (exit_monitor, market_collector)
+                        if settings.strategy_lab_collection_enabled
+                        else (exit_monitor,)
+                    )
+                    automation.start(after_first_cycles=prerequisites)
                 with backup_manager.background_check():
                     yield
             finally:

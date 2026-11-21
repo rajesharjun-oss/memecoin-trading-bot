@@ -1102,6 +1102,38 @@ def test_worker_retries_transient_state_write_failure_before_cycle() -> None:
     assert isinstance(saved[-1]["last_completed_at"], str)
 
 
+def test_startup_wait_has_a_deadline_when_prerequisite_never_runs() -> None:
+    ran = Event()
+    prerequisite = PaperAutomationWorker(interval_seconds=30, cycle=lambda: {})
+
+    def cycle() -> dict[str, object]:
+        ran.set()
+        return {}
+
+    worker = PaperAutomationWorker(interval_seconds=30, cycle=cycle)
+    worker.start(after_first_cycles=(prerequisite,), startup_wait_seconds=0.03)
+    try:
+        assert ran.wait(2)
+    finally:
+        worker.shutdown()
+
+
+def test_stopping_during_startup_wait_does_not_run_the_cycle() -> None:
+    ran = Event()
+    prerequisite = PaperAutomationWorker(interval_seconds=30, cycle=lambda: {})
+
+    def cycle() -> dict[str, object]:
+        ran.set()
+        return {}
+
+    worker = PaperAutomationWorker(interval_seconds=30, cycle=cycle)
+    status = worker.start(after_first_cycles=(prerequisite,))
+    assert status["state"] == "starting"
+    worker.shutdown()
+    assert worker.status()["running"] is False
+    assert not ran.is_set()
+
+
 def test_worker_restores_paused_state_without_running() -> None:
     worker = PaperAutomationWorker(
         interval_seconds=30,
