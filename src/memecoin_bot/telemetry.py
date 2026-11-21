@@ -14,12 +14,14 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from .candle_intake import MAX_CANDLE_INTAKE, current_intake_mints
 
 LOGGER = logging.getLogger(__name__)
 FLUSH_SECONDS = 300
@@ -64,8 +66,13 @@ DIAGNOSTIC_LABELS = {
     "focus_candle": frozenset(("1m", "5m")),
     "focus_market": frozenset(("eligible", "ineligible")),
     "focus_schedule": frozenset(("selected", "scheduled", "cycles")),
+    "intake_cycle": frozenset(
+        ("cycles", "observed_seconds", "offered", "admitted", "admitted_mint_seconds", "network_1m")
+    ),
+    "intake_evaluation": frozenset(("fresh", "stale", "missing", "deferred", "unknown_intake")),
 }
 DIAGNOSTIC_OUTCOMES = frozenset((*HTTP_OUTCOMES, *FOCUS_STATUSES, "count"))
+_INTAKE_CATEGORIES = frozenset(("intake_cycle", "intake_evaluation"))
 _RPC_METHOD_PREFIX = re.compile(
     rb'^\s*\{\s*"jsonrpc"\s*:\s*"2\.0"\s*,\s*"id"\s*:\s*\d+\s*,\s*"method"\s*:\s*"([A-Za-z][A-Za-z0-9]{0,39})"'
 )
@@ -104,6 +111,18 @@ CREATE TABLE IF NOT EXISTS telemetry_diagnostics_hourly (
     )),
     count INTEGER NOT NULL CHECK (count >= 0),
     PRIMARY KEY (hour_start, category, label, outcome)
+)
+"""
+_CREATE_INTAKE_TABLE = """
+CREATE TABLE IF NOT EXISTS telemetry_intake_hourly (
+    hour_start INTEGER NOT NULL,
+    category TEXT NOT NULL CHECK (category IN ('intake_cycle', 'intake_evaluation')),
+    label TEXT NOT NULL CHECK (label IN (
+        'cycles', 'observed_seconds', 'offered', 'admitted', 'admitted_mint_seconds', 'network_1m',
+        'fresh', 'stale', 'missing', 'deferred', 'unknown_intake'
+    )),
+    count INTEGER NOT NULL CHECK (count >= 0),
+    PRIMARY KEY (hour_start, category, label)
 )
 """
 _CREATE_FOCUS_FETCH_TABLE = """
@@ -182,7 +201,14 @@ class HourlyTelemetry:
         with self._lock:
             self._pending_focus_fetch[(hour, activity, outcome)] += 1
 
-    def market_cycle(self, ready: int, achieved: int, interval_seconds: int) -> None:
+    def market_cycle(
+        self,
+        ready: int,
+        achieved: int,
+        interval_seconds: int,
+        *,
+        intake: tuple[int, int] | None = None,
+    ) -> None:
         if min(ready, achieved, interval_seconds) < 0 or interval_seconds == 0:
             raise ValueError("Invalid market-cycle telemetry")
         now = int(time.time())
@@ -197,9 +223,20 @@ class HourlyTelemetry:
             self._pending[(hour, "capacity", "ready_mint_seconds")] += ready * elapsed
             self._pending[(hour, "capacity", "successful_calls")] += achieved
             self._pending[(hour, "capacity", "cycles")] += 1
-            self._pending[(hour, "capacity", "observed_cycle_seconds")] += min(
-                elapsed, max(60, 2 * interval_seconds)
-            )
+            observed_seconds = min(elapsed, max(60, 2 * interval_seconds))
+            self._pending[(hour, "capacity", "observed_cycle_seconds")] += observed_seconds
+            if intake is not None:
+                admitted, network_1m = intake
+                for label, count in (
+                    ("cycles", 1),
+                    ("observed_seconds", observed_seconds),
+                    ("offered", ready),
+                    ("admitted", admitted),
+                    ("admitted_mint_seconds", admitted * elapsed),
+                    ("network_1m", network_1m),
+                ):
+                    if count:
+                        self._pending_diagnostics[(hour, "intake_cycle", label, "count")] += count
 
     def flush(self) -> None:
         """Retry failed writes later; never raise into the trading worker."""
@@ -225,6 +262,7 @@ class HourlyTelemetry:
                 with connection:
                     connection.execute(_CREATE_TABLE)
                     connection.execute(_CREATE_DIAGNOSTICS_TABLE)
+                    connection.execute(_CREATE_INTAKE_TABLE)
                     connection.execute(_CREATE_FOCUS_FETCH_TABLE)
                     if batch:
                         connection.executemany(
@@ -254,10 +292,25 @@ class HourlyTelemetry:
                                     label,
                                     outcome,
                                 ), count in diagnostics_batch.items()
+                                if category not in _INTAKE_CATEGORIES
+                            ),
+                        )
+                        connection.executemany(
+                            "INSERT INTO telemetry_intake_hourly "
+                            "(hour_start, category, label, count) "
+                            "VALUES (?, ?, ?, ?) ON CONFLICT(hour_start, category, label) "
+                            "DO UPDATE SET count = count + excluded.count",
+                            (
+                                (hour, category, label, count)
+                                for (hour, category, label, _), count in diagnostics_batch.items()
+                                if category in _INTAKE_CATEGORIES
                             ),
                         )
                     connection.execute(
                         "DELETE FROM telemetry_diagnostics_hourly WHERE hour_start < ?", (cutoff,)
+                    )
+                    connection.execute(
+                        "DELETE FROM telemetry_intake_hourly WHERE hour_start < ?", (cutoff,)
                     )
                     if focus_batch:
                         connection.executemany(
@@ -419,7 +472,13 @@ def http_client(endpoint: str, **kwargs: Any) -> httpx.Client:
 
 
 def record_market_cycle(
-    ready: object, succeeded: object, cache_hits: object, interval: int
+    ready: object,
+    succeeded: object,
+    cache_hits: object,
+    interval: int,
+    *,
+    intake_admitted: object = None,
+    intake_network_1m_successes: object = None,
 ) -> None:
     try:
         if _recorder is None:
@@ -433,7 +492,16 @@ def record_market_cycle(
             return
         if cache_hits > succeeded:
             return
-        _recorder.market_cycle(ready, succeeded - cache_hits, interval)
+        network_calls = succeeded - cache_hits
+        intake = (
+            (intake_admitted, intake_network_1m_successes)
+            if type(intake_admitted) is int
+            and type(intake_network_1m_successes) is int
+            and 0 <= intake_admitted <= min(ready, MAX_CANDLE_INTAKE)
+            and 0 <= intake_network_1m_successes <= network_calls
+            else None
+        )
+        _recorder.market_cycle(ready, network_calls, interval, intake=intake)
     except Exception as exc:
         LOGGER.warning("Market telemetry failed (%s)", type(exc).__name__)
 
@@ -465,6 +533,7 @@ def record_candidate_evaluations(
     evidence_rows: Sequence[Mapping[str, object]],
     *,
     focus_state_loader: Callable[[], Mapping[str, object] | None] | None = None,
+    intake_state_loader: Callable[[], Mapping[str, object] | None] | None = None,
 ) -> None:
     """Count every market-eligible evaluation; unverified candles never count as fresh."""
     try:
@@ -484,6 +553,12 @@ def record_candidate_evaluations(
             and isinstance(raw_mints, list)
             else frozenset()
         )
+        admitted_mints: frozenset[str] | None = None
+        if intake_state_loader is not None:
+            try:
+                admitted_mints = current_intake_mints(intake_state_loader(), now=int(time.time()))
+            except Exception as exc:
+                LOGGER.warning("Intake telemetry lookup failed (%s)", type(exc).__name__)
         for evidence in evidence_rows:
             inputs = evidence.get("market_gate_inputs")
             mint = inputs.get("mint") if isinstance(inputs, dict) else None
@@ -511,22 +586,33 @@ def record_candidate_evaluations(
                         else "missing"
                     )
                     _safe_add_diagnostic("focus_candle", frame, outcome)
-            if not isinstance(raw_signals, dict):
-                _safe_add("candles", "missing")
-                continue
-            statuses = {
-                frame: signal.get("status") if isinstance(signal, dict) else None
-                for frame, signal in raw_signals.items()
-                if isinstance(frame, str)
-            }
+            statuses = (
+                {
+                    frame: signal.get("status") if isinstance(signal, dict) else None
+                    for frame, signal in raw_signals.items()
+                    if isinstance(frame, str)
+                }
+                if isinstance(raw_signals, dict)
+                else {}
+            )
             if any(statuses.get(frame) in (None, "collecting") for frame in ("1m", "5m")):
-                _safe_add("candles", "missing")
+                candle_outcome = "missing"
             elif any(statuses.get(frame) != "ready" for frame in ("1m", "5m")) or any(
                 statuses.get(frame) in _UNUSABLE_CANDLE_STATUSES for frame in ("15m", "1h")
             ):
-                _safe_add("candles", "stale")
+                candle_outcome = "stale"
             else:
-                _safe_add("candles", "fresh")
+                candle_outcome = "fresh"
+            _safe_add("candles", candle_outcome)
+            if intake_state_loader is not None:
+                intake_outcome = (
+                    "unknown_intake"
+                    if admitted_mints is None or not isinstance(mint, str)
+                    else candle_outcome
+                    if mint in admitted_mints
+                    else "deferred"
+                )
+                _safe_add_diagnostic("intake_evaluation", intake_outcome, "count")
     except Exception as exc:
         LOGGER.warning("Candle telemetry failed (%s)", type(exc).__name__)
 
@@ -560,6 +646,7 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
     diagnostics: Counter[tuple[str, str, str]] = Counter()
     focus_fetch: Counter[tuple[str, str]] = Counter()
     diagnostic_hours: set[int] = set()
+    intake_hours: set[int] = set()
     diagnostics_available = False
     focus_fetch_available = False
     legacy_ignored: Counter[str] = Counter()
@@ -584,6 +671,14 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
                 diagnostics_available = True
             except sqlite3.OperationalError:
                 diagnostic_rows = []  # Existing journals predate this additive table.
+            with suppress(sqlite3.OperationalError):
+                diagnostic_rows.extend(
+                    connection.execute(
+                        "SELECT hour_start, category, label, 'count', count "
+                        "FROM telemetry_intake_hourly WHERE hour_start >= ? AND hour_start < ?",
+                        (start, end),
+                    ).fetchall()
+                )
             try:
                 focus_rows = connection.execute(
                     "SELECT activity, outcome, count FROM telemetry_focus_fetch_hourly "
@@ -614,6 +709,8 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
         ):
             diagnostics[(category, label, outcome)] += count
             diagnostic_hours.add(hour)
+            if category == "intake_cycle" and label == "cycles" and outcome == "count" and count:
+                intake_hours.add(hour)
     for hour, metric, outcome, count in rows:
         if metric in ENDPOINTS and outcome == "other_error" and type(count) is int and count >= 0:
             legacy_ignored[metric] += count
@@ -697,6 +794,20 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
         if "undefined" in gates.values()
         else "pass"
     )
+    intake_cycle = {
+        label: diagnostics[("intake_cycle", label, "count")]
+        for label in sorted(DIAGNOSTIC_LABELS["intake_cycle"])
+    }
+    intake_evaluations = {
+        label: diagnostics[("intake_evaluation", label, "count")]
+        for label in sorted(DIAGNOSTIC_LABELS["intake_evaluation"])
+    }
+    intake_total = sum(intake_evaluations[label] for label in ("fresh", "stale", "missing"))
+    intake_complete = (
+        complete
+        and len(intake_hours) == hours
+        and intake_cycle["observed_seconds"] >= 0.95 * window_seconds
+    )
     return {
         "window_start_utc": _stamp(start),
         "window_end_utc": _stamp(end),
@@ -704,6 +815,40 @@ def telemetry_report(state_path: Path, hours: int, *, now: int | None = None) ->
         "complete_hours_with_collector_cycles": len(hours_seen),
         "collector_observed_seconds": observed_seconds,
         "window_complete": complete,
+        "candle_intake_experiment": {
+            "hours_with_cycles": len(intake_hours),
+            "window_complete": intake_complete,
+            "collector_cycles": intake_cycle["cycles"],
+            "observed_seconds": intake_cycle["observed_seconds"],
+            "offered_slots": intake_cycle["offered"],
+            "admitted_slots": intake_cycle["admitted"],
+            "deferred_slots": intake_cycle["offered"] - intake_cycle["admitted"],
+            "evaluations": intake_evaluations,
+            "admitted_fresh_pct": round(100 * intake_evaluations["fresh"] / intake_total, 3)
+            if intake_total
+            else None,
+            "needed_1m_calls_per_minute": round(
+                intake_cycle["admitted_mint_seconds"] / TARGET_REFRESH_SECONDS / (hours * 60), 3
+            ),
+            "successful_1m_network_calls_per_minute": round(
+                intake_cycle["network_1m"] / (hours * 60), 3
+            ),
+            "candles_gate": (
+                "undefined"
+                if not intake_complete or not intake_total or intake_evaluations["unknown_intake"]
+                else "pass"
+                if intake_evaluations["fresh"] * 20 >= intake_total * 19
+                else "fail"
+            ),
+            "capacity_gate": (
+                "undefined"
+                if not intake_complete or not intake_cycle["admitted_mint_seconds"]
+                else "pass"
+                if intake_cycle["network_1m"] * TARGET_REFRESH_SECONDS
+                >= intake_cycle["admitted_mint_seconds"]
+                else "fail"
+            ),
+        },
         "endpoints": endpoint_results,
         "diagnostics": {
             "available": diagnostics_available,

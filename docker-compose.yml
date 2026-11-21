@@ -6,7 +6,10 @@ services:
     image: memeops-paper:local
     container_name: memeops-paper-worker
     network_mode: host
-    env_file: /etc/memecoin-bot/bot.env
+    env_file:
+      - /etc/memecoin-bot/bot.env
+      - path: /etc/memecoin-bot/candle-intake.env
+        required: false
     environment:
       LIVE_TRADING_ENABLED: "false"
       PAPER_AUTOMATION_AUTOSTART: "true"

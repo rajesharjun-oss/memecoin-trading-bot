@@ -26,6 +26,12 @@ which includes the Compose plugin.
    `sudo docker compose logs --tail=100 worker alerts`. The worker may be in its
    five-minute healthcheck start period while the first cycles finish.
 
+For the optional paper candle experiment, set `PAPER_CANDLE_CANDIDATE_LIMIT=4`
+in `/etc/memecoin-bot/candle-intake.env` and recreate only the worker.
+Set it to `0` there and recreate the worker to restore standard allocation.
+Use `telemetry-report --hours 24` after 24 whole hours of the same configuration.
+The experiment section tracks admitted candles separately from the full eligible population.
+
 The worker uses host networking solely so its existing `127.0.0.1:8787`
 dashboard can be reached through SSH. Compose publishes **no ports**. On your
 computer, run `ssh -N -L 8787:127.0.0.1:8787 USER@VM`, then open

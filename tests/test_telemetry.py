@@ -5,6 +5,7 @@ import time
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -157,6 +158,73 @@ def test_candidate_exit_and_market_cycle_counters(
     assert counts[("mark_quotes", "succeeded")] == 1
     assert counts[("capacity", "ready_mint_seconds")] == 90
     assert counts[("capacity", "successful_calls")] == 1
+
+
+def test_intake_keeps_full_population_and_excludes_unknown_membership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _recorder(tmp_path, monkeypatch)
+    end = int(time.time()) // 3_600 * 3_600
+    observed = end - 120
+    with monkeypatch.context() as sample_clock:
+        sample_clock.setattr("memecoin_bot.telemetry.time.time", lambda: observed)
+        telemetry.record_market_cycle(6, 3, 1, 30, intake_admitted=2, intake_network_1m_successes=1)
+        ready = {"1m": {"status": "ready"}, "5m": {"status": "ready"}}
+        telemetry.record_candidate_evaluations(
+            [
+                {
+                    "market_gate_verdict": "eligible",
+                    "market_gate_inputs": {"mint": "admitted"},
+                    "candle_signals": ready,
+                },
+                {"market_gate_verdict": "eligible", "market_gate_inputs": {"mint": "outside"}},
+            ],
+            intake_state_loader=lambda: {"mints": ["admitted"], "updated_at": observed},
+        )
+        telemetry.record_candidate_evaluations(
+            [{"market_gate_verdict": "eligible", "market_gate_inputs": {"mint": "admitted"}}],
+            intake_state_loader=lambda: {"mints": ["admitted"], "updated_at": observed - 300},
+        )
+    recorder.flush()
+    report = telemetry.telemetry_report(recorder.state_path, 1, now=end)
+    baseline = cast(dict[str, object], report["candidate_candles"])
+    experiment = cast(dict[str, object], report["candle_intake_experiment"])
+    evaluations = cast(dict[str, int], experiment["evaluations"])
+    assert baseline["evaluations"] == 3
+    assert baseline["fresh"] == 1
+    assert evaluations["fresh"] == evaluations["deferred"] == evaluations["unknown_intake"] == 1
+    assert experiment["offered_slots"] == 6
+    assert experiment["admitted_slots"] == 2
+    assert experiment["deferred_slots"] == 4
+    assert experiment["window_complete"] is False
+    assert experiment["candles_gate"] == "undefined"
+    assert experiment["capacity_gate"] == "undefined"
+
+
+def test_intake_gate_uses_only_its_1m_calls_and_requires_complete_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _recorder(tmp_path, monkeypatch)
+    end = int(time.time()) // 3_600 * 3_600
+    for hour in range(end - 86_400, end, 3_600):
+        recorder.add("capacity", "cycles", at=hour)
+        recorder.add("capacity", "observed_cycle_seconds", 3_600, at=hour)
+        recorder.add("capacity", "successful_calls", 240, at=hour)
+        recorder.add_diagnostic("intake_cycle", "cycles", "count", at=hour)
+        recorder.add_diagnostic("intake_cycle", "observed_seconds", "count", 3_600, at=hour)
+        recorder.add_diagnostic("intake_cycle", "admitted_mint_seconds", "count", 14_400, at=hour)
+        recorder.add_diagnostic("intake_cycle", "network_1m", "count", 90, at=hour)
+        recorder.add_diagnostic("intake_evaluation", "fresh", "count", 19, at=hour)
+        recorder.add_diagnostic("intake_evaluation", "missing", "count", 1, at=hour)
+    recorder.flush()
+    report = telemetry.telemetry_report(recorder.state_path, 24, now=end)
+    experiment = cast(dict[str, object], report["candle_intake_experiment"])
+    assert experiment["window_complete"] is True
+    assert experiment["needed_1m_calls_per_minute"] == 2
+    assert experiment["successful_1m_network_calls_per_minute"] == 1.5
+    assert experiment["admitted_fresh_pct"] == 95
+    assert experiment["candles_gate"] == "pass"
+    assert experiment["capacity_gate"] == "fail"
 
 
 def test_report_pass_fail_undefined_and_exact_window(

@@ -565,12 +565,19 @@ def create_dashboard_app(settings: Settings, pairing_code: str) -> FastAPI:
                 active_candidate_priority=lambda candidate: (
                     evaluate_candidate(candidate, settings).verdict == "eligible"
                 ),
+                candidate_intake_limit=(
+                    settings.paper_candle_candidate_limit
+                    if not settings.live_trading_enabled
+                    else 0
+                ),
             )
             record_market_cycle(
                 result.get("market_ready_mints"),
                 result.get("ohlcv_requests_succeeded"),
                 result.get("ohlcv_cache_hits"),
                 settings.strategy_lab_collection_interval_seconds,
+                intake_admitted=result.get("intake_admitted"),
+                intake_network_1m_successes=result.get("intake_network_1m_successes"),
             )
             record_focus_schedule(
                 result.get("strategy_focus_size"), result.get("strategy_focus_scheduled")
@@ -1362,6 +1369,11 @@ def create_dashboard_app(settings: Settings, pairing_code: str) -> FastAPI:
                 journal,
                 active_candidate_priority=lambda candidate: (
                     evaluate_candidate(candidate, settings).verdict == "eligible"
+                ),
+                candidate_intake_limit=(
+                    settings.paper_candle_candidate_limit
+                    if not settings.live_trading_enabled
+                    else 0
                 ),
             )
 

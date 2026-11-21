@@ -2599,8 +2599,9 @@ def test_collection_replaces_revision_blocked_focus_without_changing_cohort(
         assert research_cohort_mints(journal) == research
 
 
+@pytest.mark.parametrize("intake_limit", [0, 4])
 def test_collection_pins_market_ready_candidates_then_rotates_after_hour(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, intake_limit: int
 ) -> None:
     ready = [str(Pubkey.new_unique()) for _ in range(6)]
     cohort = [str(Pubkey.new_unique()) for _ in range(20)]
@@ -2648,6 +2649,24 @@ def test_collection_pins_market_ready_candidates_then_rotates_after_hour(
             RESEARCH_COHORT_KEY,
             {"selected_at": int(time.time()), "mints": cohort},
         )
+        if intake_limit:
+            result = collect_market_snapshots(
+                journal,
+                active_candidate_priority=lambda item: item["mint"] in ready,
+                candidate_intake_limit=intake_limit,
+            )
+            state = journal.runtime_state("paper_candle_intake") or {}
+            admitted = set(cast(list[str], state["mints"]))
+            assert len(admitted) == intake_limit
+            assert result["market_ready_mints"] == len(ready)
+            assert result["active_market_ready_size"] == intake_limit
+            assert set(calls) & set(ready) <= admitted
+            assert set(calls) & set(cohort)
+            assert research_cohort_mints(journal) == cohort
+            assert result["intake_network_1m_successes"] == len(
+                [mint for mint in calls if mint in admitted]
+            )
+            return
         pinned: set[str] | None = None
         for _ in range(3):
             before = len(calls)
